@@ -5,7 +5,26 @@ import shutil
 from sklearn.externals import joblib
 import json
 from IPython import parallel
+from sklearn.base import BaseEstimator
 
+################ greedy ensemble model class ################
+class GreedyEnsemble(BaseEstimator):
+	def __init__(self, ensemble_path, scorefn, 
+			andom_seed = 0, client = None):
+		"""
+		scorefn = function used to score model (in greedy search)
+		client = client to IPython.parallel.Client, if None, create new one
+		"""
+		self.ensemble_path = ensemble_path
+		self.scorefn = scorefn
+		self.random_seed = random_seed
+		self.client = client or parallel.Client()
+	def fit(self, model_names):
+		pass
+	def partial_fit(self, ??):
+		pass
+	def predict(self, ??):
+		pass
 
 ################ ensembles, data, and models #########
 def new_ensemble(ensemble_name, container_path):
@@ -39,22 +58,181 @@ def write_data(ensemble_path, data_name, data, data_meta):
 	store_files = _persist(data_path, data)
 	data_record = {}
 	data_record.update(data_meta)
-	data_record.update({'store_files': store_files
+	data_record.update({'stored_files': store_files
 						, 'file': data_path})
 	_write_json_record(_get_path(ensemble_path, 'data_json'), 
-						data_record, overwrite = True)
+						{data_name : data_record}, overwrite = False)
+
+def remove_data(ensemble_path, data_name):
+	"""
+	1. remove the persisted file
+	2. remove the record in data.json
+	"""
+	data_json_path = _get_path(ensemble_path, 'data_json')
+	data_record = _read_json_record(data_json_path, [data_name])[data_name]
+	stored_files = data_record['stored_files']
+	_remove(stored_files)
+	_remove_json_record(data_json_path, [data_name])
+
+def load_data(ensemble_path, data_name):
+	"""
+	return data record and data tuple
+	"""
+	data_json_path = _get_path(ensemble_path, 'data_json')
+	data_record = _read_json_record(data_json_path, [data_name])[data_name]
+	data = _load(data_record['file'])
+	return (data_record, data)
+
+def write_model(ensemble_path, model_name, model, model_meta):
+	model_file = model_name + '.pkl'
+	model_path = path.join(_get_path(ensemble_path, 'models_folder'),
+										model_file)
+	store_files = _persist(model_path, model)
+	model_record = {}
+	model_record.update(model_meta)
+	## file and stored_files always overwrite model_meta
+	model_record.update({
+		'stored_files': store_files,
+		'file': model_path
+		})
+	_write_json_record(_get_path(ensemble_path, 'models_json'), 
+						{model_name : model_record}, overwrite = False)
+
+def update_model_record(ensemble_path, model_name, updates):
+	models_json_path = _get_path(ensemble_path, 'models_json')
+	model_record = _read_json_record(models_json_path, [model_name])[model_name]
+	model_record.update(updates)
+	_write_json_record(models_json_path, {model_name:model_record}, overwrite=False)
+
+def remove_model(ensemble_path, model_name):
+	models_json_path = _get_path(ensemble_path, 'models_json')
+	model_record = _read_json_record(models_json_path, [model_name])[model_name]
+	stored_files = model_record['stored_files']
+	_remove(stored_files)
+	_remove_json_record(models_json_path, [model_name])
+	print 'remove ', model_name, 'from ', models_json_path
+
+def load_model(ensemble_path, model_name):
+	models_json_path = _get_path(ensemble_path, 'models_json')
+	model_record = _read_json_record(models_json_path, [model_name])[model_name]
+	model = _load(model_record['file'])
+	return (model_record, model) 
+
+def train_model(ensemble_path, model_name, data_type, write_json=True):
+	"""
+	data_type: {'train_data', 'validation_data', 'test_data'}
+	write_json: if False, return the params to write_model but dont 
+	write to json file immediately, it is used for parallel mode where
+	models.js needs to be updated in a single thread.
+	"""
+	## load model
+	model_record, model = load_model(ensemble_path, model_name)
+	if data_type not in model_record:
+		raise RuntimeError('data type ' + data_type + ' NOT in model config')
+	## load data
+	_, (X, y) = load_data(ensemble_path, model_record[data_type])
+	model.fit(X, y)
+	## update model and its configuration
+	if write_json:
+		write_model(ensemble_path, model_name, model, model_record)
+	return (ensemble_path, model_name, model, model_record)
+
+def paralle_train_models(ensemble_path, model_data_pairs, client):
+	"""
+	model_data_pairs: [(model_name, data_type), ...]
+	"""
+	tasks = [('ensemble.train_model', {
+						'ensemble_path': ensemble_path
+						, 'model_name': model_name
+						, 'data_type': data_type
+						, 'write_json' : False}) 
+				for (model_name, data_type) 
+				in model_data_pairs]
+	results = _parallel(tasks, client)
+	## update models.json
+	for model_record in results:
+		write_model(*model_record)
+
+
+def predict_model(ensemble_path, model_name, data_type, probabilistic):
+	"""
+	data_type: {'train_data', 'validation_data', 'test_data'}
+	probabilistic: probabilistic prediction or not
+	RETURN (model_name, (target[if any], prediction))
+	"""
+	## load model
+	model_record, model = load_model(ensemble_path, model_name)
+	if data_type not in model_record:
+		raise RuntimeError('data type ' + data_type + 'NOT in model config')
+	## load data
+	_, (X, y) = load_data(ensemble_path, model_record[data_type])
+	predict = model.predict_proba if probabilistic else model.predict
+	return (model_name, (y, predict(X)))
+
+def parallel_predict_model(ensemble_path, model_data_prob, client):
+	"""
+	model_data_prob: list of (model_name, data_type, probabilistic)
+	"""
+	tasks = [('ensemble.predict_model', {
+					'ensemble_path': ensemble_path
+					, 'model_name' : model_name
+					, 'data_type': data_type
+					, 'probabilistic': probabilistic})
+				for (model_name, data_type, probabilistic)
+				in model_data_prob]
+	return _parallel(tasks, client)
 
 
 ################ helper functions ####################
-def _persist(stuff_path, stuff, compress = 9):
+## parallel computing
+def _parallel(tasks, client):
+	"""
+	basic parallel execution - no explicit data scheduling and sharing
+	tasks: {fname_or_fn : kwparams}
+	"""
+	dv = client[:]
+	dv.block = True
+	## initialize parallel environment
+	current_folder = path.dirname(path.realpath(__file__))
+	dv.execute('cd %s' % current_folder)
+	dv.execute('import ensemble')
+	dv.execute('reload(ensemble)')
+	"""
+	## method 1: dispatch tasks
+	fn_tasks = [(fn_or_fname 
+					if not isinstance(fn_or_fname, str) 
+					else parallel.Reference(fn_or_fname), kwparams)
+						for (fn_or_fname, kwparams) in tasks]
+	return dv.map(lambda (fn, kwparams): fn(**kwparams), fn_tasks)
+	"""
+	## method 2: dispatch tasks
+	lb = client.load_balanced_view()
+	chunksize = len(tasks) / len(client)
+	asyn_results = []
+	for (fn_or_fname, kwparams) in tasks:
+		fn = fn_or_fname if not isinstance(fn_or_fname, str) \
+					else parallel.Reference(fn_or_fname)
+		asyn_results.append(lb.apply(fn, **kwparams))
+	return [ar.get() for ar in asyn_results]
+
+## io from/to disk ###
+def _persist(stuff_path, stuff):
 	"""
 	stuff_path: path to a pickle file 
 	stuff: data/model to be pickled
 	return path of all stored files
 	use joblib to pickle
 	"""
-	store_files = joblib.dump(stuff, stuff_path, compress=compress)
+	store_files = joblib.dump(stuff, stuff_path)
 	return map(path.abspath, store_files)
+
+def _remove(files):
+	for f in files:
+		os.remove(f)
+
+def _load(file_path):
+	return joblib.load(file_path)
+
 ## path ##
 def _get_path(ensemble_path, type):
 	"""
@@ -71,13 +249,13 @@ def _new_json_file(json_file):
 
 def _write_json_record(json_file, records, overwrite):
 	"""
-	overwrite: False will raise exception at any 
-	existing key in keys
+	overwrite: False will update existing records with new records
+	True will write records as json 
 	records: dict of {model_or_data_name: model_or_data_meta}
 	"""
-	data = read_json_record(json_file, keys = None)
-	if not overwrite and any([k in data for k in records.keys()]):
-		raise RuntimeError('key already exists')
+	data = _read_json_record(json_file, keys = None)
+	if overwrite:
+		data = records
 	else:
 		data.update(records)
 	json.dump(data, open(json_file, 'wb'))
@@ -92,3 +270,13 @@ def _read_json_record(json_file, keys = None):
 		return data
 	else:
 		return dict({k:data[k] for k in keys})
+def _remove_json_record(json_file, keys = None):
+	"""
+	assume json file to be a single dict, remove 
+	all records with key in keys
+	"""
+	data = _read_json_record(json_file, keys = None)
+	for k in keys:
+		del data[k]
+	_write_json_record(json_file, data, overwrite = True)
+

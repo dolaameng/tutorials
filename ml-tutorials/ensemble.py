@@ -7,6 +7,7 @@ import json
 from IPython import parallel
 from sklearn.base import BaseEstimator
 from functools import partial
+from scipy.stats import mode
 
 ################ greedy ensemble model class ################
 class GreedyEnsemble(BaseEstimator):
@@ -52,6 +53,11 @@ class GreedyEnsemble(BaseEstimator):
 		The voting method could be a simple average, majority-vote or others.
 		"""
 		pass
+	@staticmethod
+	def vote_major_class(yhats):
+		yarr = np.vstack(yhats)
+		y_mode = mode(yarr)[0][0]
+		return y_mode.astype(np.int)
 	def _predict_by_model(self, model_names, data_type):
 		"""
 		Use predict() to predict if 'is_probabilistic' is None or False in model config,
@@ -59,6 +65,8 @@ class GreedyEnsemble(BaseEstimator):
 		==> (target, dict of {model_name : model_prediction})
 		"""
 		n_models = len(model_names)
+		if n_models == 0:
+			raise RuntimeError('There should be at least one model to predict')
 		is_probabilistic = map(partial(read_model_meta, 
 									self.ensemble_path, 
 									keys=['is_probabilistic'], default=False), 
@@ -70,19 +78,33 @@ class GreedyEnsemble(BaseEstimator):
 		target = results[0][1][0]
 		return (target, {mdl_name : yhat for (mdl_name, (y, yhat)) in results})
 	def _greedy_search(self, candidate_predictions, init_ensemble, target, data_type):
-		_, model_predictions = self._predict_by_model(init_ensemble, data_type)
-		ensemble = [m_name for m_name in initial_ensemble]
-		ensemble_score = self.scorefn(target, self.votefn(model_predictions.values()))
+		if init_ensemble:
+			_, model_predictions = self._predict_by_model(init_ensemble, data_type)
+			ensemble = [m_name for m_name in initial_ensemble]
+			ensemble_score = self.scorefn(target, self.votefn(model_predictions.values()))
+		else:
+			model_predictions = {}
+			ensemble = []
+			ensemble_score = 0.0
+		
 		model_predictions.update(candidate_predictions)
 
 		candidates = set(candidate_predictions.keys())
 		while candidates:
-			next_model, next_score = ?? ##TODO
+			scores = [(m, self.scorefn(target, 
+									self.votefn(map(model_predictions.get, 
+													ensemble+[m])))) 
+								for m in candidates]
+			#print scores
+			next_model, next_score = max(scores,
+										key = lambda (m, s): s)
 			if next_score < ensemble_score:
 				break
 			else:
+				print 'checking model', next_model, 'improvement from ', ensemble_score, 'to', next_score
 				ensemble_score = next_score
 				ensemble.append(next_model)
+				candidates.remove(next_model)
 		return ensemble
 
 

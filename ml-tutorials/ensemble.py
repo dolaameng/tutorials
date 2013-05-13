@@ -6,25 +6,86 @@ from sklearn.externals import joblib
 import json
 from IPython import parallel
 from sklearn.base import BaseEstimator
+from functools import partial
 
 ################ greedy ensemble model class ################
 class GreedyEnsemble(BaseEstimator):
-	def __init__(self, ensemble_path, scorefn, 
-			andom_seed = 0, client = None):
+	def __init__(self, ensemble_path, scorefn, votefn,
+			random_seed = 0, client = None):
 		"""
 		scorefn = function used to score model (in greedy search)
+			sig = scorefn(y, yhat) RETURNS score
+		votefn = function used to combine different model outputs
+			sig = votefn(yhats) RETURNS combined_yhat 
 		client = client to IPython.parallel.Client, if None, create new one
 		"""
 		self.ensemble_path = ensemble_path
 		self.scorefn = scorefn
+		self.votefn = votefn
 		self.random_seed = random_seed
 		self.client = client or parallel.Client()
-	def fit(self, model_names):
+		self.ensemble_ = None
+	def fit(self, model_names, data_type = 'validation_data'):
+		"""
+		Fitting algorithm = greedy search based on the performance measured by scoring fn
+		1. make predictions by model on data_type ('validation_data')
+		2. greedy search to fill in ensemble (ensemble intialized as empty)
+			2.1 evaluate ensemble predictions by votefn
+			2.2 evaluate ensemble performance by scorefn
+		"""
+		## always re-initialize the ensemble
+		self.ensemble_ = []
+		## make predictions for all models
+		target, model_predictions = self._predict_by_model(model_names, data_type)
+		## greedy search
+		self.ensemble_ = self._greedy_search(model_predictions, self.ensemble_, target, data_type)
+		## TODO - ??
+
+	def partial_fit(self, model_names, data_type = 'validation_data'):
+		"""
+		Similar as fit() method, except that the ensemble is initialized as what it already is.
+		"""
 		pass
-	def partial_fit(self, ??):
+	def predict(self, data_type):
+		"""
+		Make prediction on new data using ensemble_. 
+		The voting method could be a simple average, majority-vote or others.
+		"""
 		pass
-	def predict(self, ??):
-		pass
+	def _predict_by_model(self, model_names, data_type):
+		"""
+		Use predict() to predict if 'is_probabilistic' is None or False in model config,
+		otherwise use predict_proba()
+		==> (target, dict of {model_name : model_prediction})
+		"""
+		n_models = len(model_names)
+		is_probabilistic = map(partial(read_model_meta, 
+									self.ensemble_path, 
+									keys=['is_probabilistic'], default=False), 
+								model_names)
+		is_probabilistic = [d['is_probabilistic'] for d in is_probabilistic]
+		data_types = [data_type for _ in xrange(n_models)]
+		params = zip(model_names, data_types, is_probabilistic)
+		results = parallel_predict_model(self.ensemble_path, params, self.client)
+		target = results[0][1][0]
+		return (target, {mdl_name : yhat for (mdl_name, (y, yhat)) in results})
+	def _greedy_search(self, candidate_predictions, init_ensemble, target, data_type):
+		_, model_predictions = self._predict_by_model(init_ensemble, data_type)
+		ensemble = [m_name for m_name in initial_ensemble]
+		ensemble_score = self.scorefn(target, self.votefn(model_predictions.values()))
+		model_predictions.update(candidate_predictions)
+
+		candidates = set(candidate_predictions.keys())
+		while candidates:
+			next_model, next_score = ?? ##TODO
+			if next_score < ensemble_score:
+				break
+			else:
+				ensemble_score = next_score
+				ensemble.append(next_model)
+		return ensemble
+
+
 
 ################ ensembles, data, and models #########
 def new_ensemble(ensemble_name, container_path):
@@ -84,6 +145,9 @@ def load_data(ensemble_path, data_name):
 	return (data_record, data)
 
 def write_model(ensemble_path, model_name, model, model_meta):
+	"""
+	model_meta = dict of model information, e.g., 'description', 'is_probabilistic'
+	"""
 	model_file = model_name + '.pkl'
 	model_path = path.join(_get_path(ensemble_path, 'models_folder'),
 										model_file)
@@ -111,6 +175,20 @@ def remove_model(ensemble_path, model_name):
 	_remove(stored_files)
 	_remove_json_record(models_json_path, [model_name])
 	print 'remove ', model_name, 'from ', models_json_path
+
+def read_model_meta(ensemble_path, model_name, keys = None, default = None):
+	"""
+	return the model meta information (dict under key=model_name in models.json) with key
+	in keys. If a key is not in meta, it returns default value None
+	if param keys = None, return the whole model meta dict 
+	"""
+	models_json_path = _get_path(ensemble_path, 'models_json')
+	model_record = _read_json_record(models_json_path, [model_name])[model_name]
+	if keys is None:
+		model_meta = model_record
+	else:
+		model_meta = {k : model_record.get(k, default) for k in keys}
+	return model_meta
 
 def load_model(ensemble_path, model_name):
 	models_json_path = _get_path(ensemble_path, 'models_json')

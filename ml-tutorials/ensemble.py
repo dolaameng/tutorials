@@ -1,3 +1,6 @@
+## Implementation of greedy ensemble package
+## Ensemble is implemented as a folder with a programming API
+
 import numpy as np 
 import os
 from os import path
@@ -8,6 +11,7 @@ from IPython import parallel
 from sklearn.base import BaseEstimator
 from functools import partial
 from scipy.stats import mode
+import copy
 
 ################ greedy ensemble model class ################
 class GreedyEnsemble(BaseEstimator):
@@ -25,8 +29,8 @@ class GreedyEnsemble(BaseEstimator):
 		self.votefn = votefn
 		self.random_seed = random_seed
 		self.client = client or parallel.Client()
-		self.ensemble_ = None
-	def fit(self, model_names, data_type = 'validation_data'):
+		self.ensemble_ = []
+	def fit(self, model_names, data_type = 'validation_data', verbose = False):
 		"""
 		Fitting algorithm = greedy search based on the performance measured by scoring fn
 		1. make predictions by model on data_type ('validation_data')
@@ -39,20 +43,30 @@ class GreedyEnsemble(BaseEstimator):
 		## make predictions for all models
 		target, model_predictions = self._predict_by_model(model_names, data_type)
 		## greedy search
-		self.ensemble_ = self._greedy_search(model_predictions, self.ensemble_, target, data_type)
-		## TODO - ??
+		self.ensemble_ = self._greedy_search(model_predictions, self.ensemble_, target, data_type, verbose)
+		return self
 
-	def partial_fit(self, model_names, data_type = 'validation_data'):
+	def partial_fit(self, model_names, data_type = 'validation_data', verbose = False):
 		"""
 		Similar as fit() method, except that the ensemble is initialized as what it already is.
 		"""
-		pass
+		target, model_predictions = self._predict_by_model(model_names, data_type)
+		new_ensemble = self._greedy_search(model_predictions, self.ensemble_, target, data_type, verbose)
+		self.ensemble_ = new_ensemble
+		#print 'CURRENT ENSEMBLE', self.ensemble_, 'new added models', new_models
+		return self
 	def predict(self, data_type):
 		"""
 		Make prediction on new data using ensemble_. 
 		The voting method could be a simple average, majority-vote or others.
 		"""
-		pass
+		target, ensemble_predictions = self._predict_by_model(self.ensemble_, data_type)
+		combined_prediction = self.votefn(ensemble_predictions.values())
+		return combined_prediction
+	def score(self, data_type):
+		target, ensemble_predictions = self._predict_by_model(self.ensemble_, data_type)
+		combined_prediction = self.votefn(ensemble_predictions.values())
+		return self.scorefn(target, combined_prediction)
 	@staticmethod
 	def vote_major_class(yhats):
 		yarr = np.vstack(yhats)
@@ -77,10 +91,10 @@ class GreedyEnsemble(BaseEstimator):
 		results = parallel_predict_model(self.ensemble_path, params, self.client)
 		target = results[0][1][0]
 		return (target, {mdl_name : yhat for (mdl_name, (y, yhat)) in results})
-	def _greedy_search(self, candidate_predictions, init_ensemble, target, data_type):
+	def _greedy_search(self, candidate_predictions, init_ensemble, target, data_type, verbose):
 		if init_ensemble:
 			_, model_predictions = self._predict_by_model(init_ensemble, data_type)
-			ensemble = [m_name for m_name in initial_ensemble]
+			ensemble = copy.deepcopy(init_ensemble)#[m_name for m_name in init_ensemble]
 			ensemble_score = self.scorefn(target, self.votefn(model_predictions.values()))
 		else:
 			model_predictions = {}
@@ -90,6 +104,7 @@ class GreedyEnsemble(BaseEstimator):
 		model_predictions.update(candidate_predictions)
 
 		candidates = set(candidate_predictions.keys())
+		#print 'ensemble', ensemble
 		while candidates:
 			scores = [(m, self.scorefn(target, 
 									self.votefn(map(model_predictions.get, 
@@ -99,9 +114,12 @@ class GreedyEnsemble(BaseEstimator):
 			next_model, next_score = max(scores,
 										key = lambda (m, s): s)
 			if next_score < ensemble_score:
+				if verbose:
+					print 'checking model', next_model, 'NO improvement from ', ensemble_score, 'to', next_score
 				break
 			else:
-				print 'checking model', next_model, 'improvement from ', ensemble_score, 'to', next_score
+				if verbose:
+					print 'checking model', next_model, 'improvement from ', ensemble_score, 'to', next_score
 				ensemble_score = next_score
 				ensemble.append(next_model)
 				candidates.remove(next_model)
@@ -126,6 +144,7 @@ def new_ensemble(ensemble_name, container_path):
 	os.mkdir(_get_path(ensemble_path, 'models_folder'))
 	_new_json_file(_get_path(ensemble_path, 'data_json'))
 	_new_json_file(_get_path(ensemble_path, 'models_json'))
+	return ensemble_path
 
 ## remove_ensemble - rm -fR ensemble_folder
 

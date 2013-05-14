@@ -6,6 +6,7 @@
 ## TODO - ONLINE and OFFLINE two versions
 
 import numpy as np
+from sklearn.cross_validation import Bootstrap
 
 ########### data partitioning ##################
 
@@ -31,14 +32,31 @@ def patch(data, rows, cols = None):
 		raise RuntimeError('only supports 1D or 2D array') 
 
 ########## sequence generator #################
-def strided_seqs(seq, stride, subsz):
+def strided_seqs(seq, stride, subsize):
 	"""
-	rng = the sequence to be selected from
+	seq = the sequence to be selected from
 	stride = stride (diff) between different sub_seqs
-	subsz = the window size of all sub_seqs
+	subsize = the window size of all sub_seqs
 	return iterable of subseqs 
 	"""
-	pass
+	extended_seq = seq + seq[:subsize]
+	n_strides = len(seq) / stride
+	sub_indices = [(i*stride, i*stride+subsize) for i in xrange(n_strides)]
+	return [extended_seq[low:up] for (low, up) in sub_indices]
+
+def bootstrap_seqs(seq, n_iter, subsize, random_state = 0):
+	"""
+	seq = the sequence to be selected from
+	n_iter = number of sub sequences
+	subsize = length of sub sequences
+	return iterable of subseqs 
+	"""
+	bs = Bootstrap(len(seq), n_iter = n_iter, train_size = subsize, 
+					random_state = random_state)
+	sub_indices = [index for (index, _) in bs]
+	seq_array = np.asarray(seq)
+	return [seq_array[i] for i in sub_indices]
+
 
 
 ##################### helper function ###############

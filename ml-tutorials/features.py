@@ -22,11 +22,11 @@ def patch(data, rows, cols = None):
 	dim = get_dim(data)
 	if dim == 1:
 		## ignore cols
-		return data[rows] if rows else data
+		return data[rows] if rows is not None else data
 	elif dim == 2:
 		nrows, ncols = data.shape
-		rows = rows or xrange(nrows)
-		cols = cols or xrange(ncols)
+		rows = rows if rows is not None else xrange(nrows)
+		cols = cols if cols is not None else  xrange(ncols)
 		return data[np.ix_(rows, cols)]
 	else:
 		raise RuntimeError('only supports 1D or 2D array') 

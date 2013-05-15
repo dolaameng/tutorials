@@ -88,7 +88,7 @@ class GreedyEnsemble(BaseEstimator):
 		is_probabilistic = [d['is_probabilistic'] for d in is_probabilistic]
 		data_types = [data_type for _ in xrange(n_models)]
 		params = zip(model_names, data_types, is_probabilistic)
-		results = parallel_predict_model(self.ensemble_path, params, self.client)
+		results = parallel_predict_model(self.ensemble_path, params, self.client, verbose=False)
 		target = results[0][1][0]
 		return (target, {mdl_name : yhat for (mdl_name, (y, yhat)) in results})
 	def _greedy_search(self, candidate_predictions, init_ensemble, target, data_type, verbose):
@@ -256,7 +256,7 @@ def train_model(ensemble_path, model_name, data_type, write_json=True):
 		write_model(ensemble_path, model_name, model, model_record)
 	return (ensemble_path, model_name, model, model_record)
 
-def paralle_train_models(ensemble_path, model_data_pairs, client):
+def paralle_train_models(ensemble_path, model_data_pairs, client, verbose = True):
 	"""
 	model_data_pairs: [(model_name, data_type), ...]
 	"""
@@ -267,7 +267,7 @@ def paralle_train_models(ensemble_path, model_data_pairs, client):
 						, 'write_json' : False}) 
 				for (model_name, data_type) 
 				in model_data_pairs]
-	results = _parallel(tasks, client)
+	results = _parallel(tasks, client, verbose)
 	## update models.json
 	for model_record in results:
 		write_model(*model_record)
@@ -288,7 +288,7 @@ def predict_model(ensemble_path, model_name, data_type, probabilistic):
 	predict = model.predict_proba if probabilistic else model.predict
 	return (model_name, (y, predict(X)))
 
-def parallel_predict_model(ensemble_path, model_data_prob, client):
+def parallel_predict_model(ensemble_path, model_data_prob, client, verbose=True):
 	"""
 	model_data_prob: list of (model_name, data_type, probabilistic)
 	"""
@@ -299,12 +299,12 @@ def parallel_predict_model(ensemble_path, model_data_prob, client):
 					, 'probabilistic': probabilistic})
 				for (model_name, data_type, probabilistic)
 				in model_data_prob]
-	return _parallel(tasks, client)
+	return _parallel(tasks, client, verbose)
 
 
 ################ helper functions ####################
 ## parallel computing
-def _parallel(tasks, client):
+def _parallel(tasks, client, verbose = True):
 	"""
 	basic parallel execution - no explicit data scheduling and sharing
 	tasks: {fname_or_fn : kwparams}
@@ -332,6 +332,15 @@ def _parallel(tasks, client):
 		fn = fn_or_fname if not isinstance(fn_or_fname, str) \
 					else parallel.Reference(fn_or_fname)
 		asyn_results.append(lb.apply(fn, **kwparams))
+	if verbose:	
+		pre_n_finished = 0
+		while not all([ar.ready() for ar in asyn_results]):
+			n_finished = sum([ar.ready() for ar in asyn_results])
+			n_total = len(asyn_results)
+			if n_finished != pre_n_finished:
+				print 'Parallel Progress: finished %d out of %d tasks' % (n_finished, n_total) 
+				pre_n_finished = n_finished
+		print 'Parallel Progress: DONE'
 	return [ar.get() for ar in asyn_results]
 
 ## io from/to disk ###

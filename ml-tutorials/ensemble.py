@@ -81,10 +81,18 @@ class GreedyEnsemble(BaseEstimator):
 		n_models = len(model_names)
 		if n_models == 0:
 			raise RuntimeError('There should be at least one model to predict')
+		dv = self.client[:]
+		is_probabilistic = dv.map(partial(read_model_meta, 
+									self.ensemble_path, 
+									keys=['is_probabilistic'], default=False), 
+								model_names)
+		"""
 		is_probabilistic = map(partial(read_model_meta, 
 									self.ensemble_path, 
 									keys=['is_probabilistic'], default=False), 
 								model_names)
+		"""
+		print 'THIS STEP DONE'
 		is_probabilistic = [d['is_probabilistic'] for d in is_probabilistic]
 		data_types = [data_type for _ in xrange(n_models)]
 		params = zip(model_names, data_types, is_probabilistic)
@@ -148,7 +156,29 @@ def new_ensemble(ensemble_name, container_path):
 
 ## remove_ensemble - rm -fR ensemble_folder
 
-def write_data(ensemble_path, data_name, data, data_meta):
+def batch_write_data(ensemble_path, data_infor):
+	"""
+	batch version of write data 
+	data_infor = list of tuples (data_name, data, data_meta)
+	main diff from write_data is that the json file will
+	be written only once in the last 
+	"""
+	data_records = []
+	for (data_name, data, data_meta) in data_infor:
+		data_file = data_name + '.pkl'
+		data_path = path.join(_get_path(ensemble_path, 'data_folder'), 
+										data_file)
+		store_files = _persist(data_path, data)
+		data_meta = data_meta or {}
+		data_record = {}
+		data_record.update(data_meta)
+		data_record.update({'stored_files': store_files
+						, 'file': data_path})
+		data_records.append((data_name, data_record))
+	_write_json_record(_get_path(ensemble_path, 'data_json'),
+						dict(data_records), overwrite = False)
+
+def write_data(ensemble_path, data_name, data, data_meta = None):
 	"""
 	assume overwrite = True
 	update data.json with {data_name, data_meta}
@@ -158,6 +188,7 @@ def write_data(ensemble_path, data_name, data, data_meta):
 	data_path = path.join(_get_path(ensemble_path, 'data_folder'), 
 										data_file)
 	store_files = _persist(data_path, data)
+	data_meta = data_meta or {}
 	data_record = {}
 	data_record.update(data_meta)
 	data_record.update({'stored_files': store_files
@@ -185,14 +216,46 @@ def load_data(ensemble_path, data_name):
 	data = _load(data_record['file'])
 	return (data_record, data)
 
-def write_model(ensemble_path, model_name, model, model_meta):
+def batch_write_model(ensemble_path, model_infor):
+	"""
+	batch version of write models 
+	model_infor = list of tuples (model_name, model, model_meta)
+	main diff from write_model is that the json file will
+	be written only once in the last
+	"""
+	model_records = []
+	for (model_name, model, model_meta) in model_infor:
+		model_file = model_name + '.pkl'
+		model_path = path.join(_get_path(ensemble_path, 'models_folder'),
+										model_file)
+		## IT seems to be OK to write directly without removing
+		## old FILES first - there could be files NOT used by any
+		## but the reading should be OK
+		store_files = _persist(model_path, model)
+		model_meta = model_meta or {}
+		model_record = {}
+		model_record.update(model_meta)
+		## file and stored_files always overwrite model_meta
+		model_record.update({
+			'stored_files': store_files,
+			'file': model_path
+			})
+		model_records.append((model_name, model_record))
+	_write_json_record(_get_path(ensemble_path, 'models_json'), 
+						dict(model_records), overwrite = False)
+
+def write_model(ensemble_path, model_name, model, model_meta = None):
 	"""
 	model_meta = dict of model information, e.g., 'description', 'is_probabilistic'
 	"""
 	model_file = model_name + '.pkl'
 	model_path = path.join(_get_path(ensemble_path, 'models_folder'),
 										model_file)
+	## IT seems to be OK to write directly without removing
+	## old FILES first - there could be files NOT used by any
+	## but the reading should be OK
 	store_files = _persist(model_path, model)
+	model_meta = model_meta or {}
 	model_record = {}
 	model_record.update(model_meta)
 	## file and stored_files always overwrite model_meta
@@ -256,7 +319,7 @@ def train_model(ensemble_path, model_name, data_type, write_json=True):
 		write_model(ensemble_path, model_name, model, model_record)
 	return (ensemble_path, model_name, model, model_record)
 
-def paralle_train_models(ensemble_path, model_data_pairs, client, verbose = True):
+def parallel_train_models(ensemble_path, model_data_pairs, client, verbose = True):
 	"""
 	model_data_pairs: [(model_name, data_type), ...]
 	"""
@@ -269,8 +332,12 @@ def paralle_train_models(ensemble_path, model_data_pairs, client, verbose = True
 				in model_data_pairs]
 	results = _parallel(tasks, client, verbose)
 	## update models.json
+	model_infor = [r[1:] for r in results] # exclude ensemble_path
+	batch_write_model(ensemble_path, model_infor)
+	"""
 	for model_record in results:
 		write_model(*model_record)
+	"""
 
 
 def predict_model(ensemble_path, model_name, data_type, probabilistic):

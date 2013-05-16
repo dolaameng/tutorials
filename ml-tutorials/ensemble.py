@@ -74,13 +74,6 @@ class GreedyEnsemble(BaseEstimator):
 		target, ensemble_predictions = self._predict_by_model(self.ensemble_, data_type)
 		combined_prediction = self.votefn(ensemble_predictions.values())
 		return combined_prediction
-	def save(self):
-		"""
-		SAVE relevant MODELS and DATA in ensemble into a mini-ensemble folder
-		so that the optimal ensemble can be continously merged with new solutions
-		in an aggressive way
-		"""
-		pass
 	def score(self, data_type):
 		target, ensemble_predictions = self._predict_by_model(self.ensemble_, data_type)
 		combined_prediction = self.votefn(ensemble_predictions.values())
@@ -173,6 +166,49 @@ def new_ensemble(ensemble_name, container_path):
 	_new_json_file(_get_path(ensemble_path, 'data_json'))
 	_new_json_file(_get_path(ensemble_path, 'models_json'))
 	return ensemble_path
+
+def copy_ensemble(from_ensemble, to_ensemble, model_names, overwrite=False):
+	"""
+	copy relevant data and models specificed by model_names 
+	from from_ensemble to to_ensemble.
+	if to_ensemble does NOT exist - it will be created
+	if to_ensemble already exists - new model_names will be merged 
+	and overwite the existing data/model with same names
+	if overwite=True, to_ensemble will be erased and re-created
+	"""
+	if overwrite and path.exists(to_ensemble):
+		shutil.rmtree(to_ensemble)
+	if not path.exists(to_ensemble):
+		new_ensemble(to_ensemble, '')
+	## load model records and files
+	model_records = _read_json_record(_get_path(from_ensemble, 
+												'models_json'), 
+									model_names)
+	model_files = set(sum([mr['stored_files'] for mr in model_records.values()], []))
+	## find relevant data - train, validation and test
+	train_data = set([mr['train_data'] 
+						for mr in model_records.values() if mr['train_data']])
+	validation_data = set([mr['validation_data']
+						for mr in model_records.values() if mr['validation_data']])
+	test_data = set([mr['test_data']
+						for mr in model_records.values() if mr['test_data']])
+	data_names = train_data | validation_data | test_data
+	data_records = _read_json_record(_get_path(from_ensemble,
+												'data_json'),
+									data_names)
+	data_files = set(sum([dr['stored_files'] for dr in data_records.values()], []))
+	## write model and data records
+	_write_json_record(_get_path(to_ensemble, 'models_json'), 
+						model_records, overwrite = False)
+	_write_json_record(_get_path(to_ensemble, 'data_json'),
+						data_records, overwrite = False)
+	## copy model and data files
+	for f in model_files:
+		shutil.copy(f, _get_path(to_ensemble, 'models_folder'))
+	for f in data_files:
+		shutil.copy(f, _get_path(to_ensemble, 'data_folder'))
+
+
 
 def all_model_names(ensemble_path):
 	models_json_path = _get_path(ensemble_path, 'models_json')

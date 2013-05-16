@@ -5,8 +5,101 @@
 
 ## TODO - ONLINE and OFFLINE two versions
 
+
 import numpy as np
 from sklearn.cross_validation import Bootstrap
+from sklearn.base import BaseEstimator
+from sklearn.preprocessing import StandardScaler
+import random, time, os, shutil
+from os import path
+from sklearn.externals import joblib
+from IPython import parallel
+from functools import partial
+from itertools import cycle
+from scipy import sparse
+
+########### feature transformation #############
+class TriKmeansFeatures(BaseEstimator):
+	def __init__(self, n_clusters, feat_patches, client,
+					cache_dir = '/tmp', algo_name = 'KMeans', 
+					sparse_result = True, random_state = 0):
+		"""
+		n_clusters = number of clusters used in KMeans or MiniBatchKmeans
+		feat_patches = patches of feat indices to build clusters on, e.g., 
+			[[feat_idx_i1, ..., feat_idx_j1], [feat_idx_i2, .., feat_idx_j2]]
+			the feat_patches can be extracted by sequence generators such as 
+			strided_seqs or bootstrap_seqs in the package.
+		cache_dir = the cache dir for shared memory object - in parallel computing
+		algo_name = the clustering algorithm used for now only {'KMeans', 'MiniBatchKmeans'}
+		sparse_result = if the transformed result should be a sparse matrix coo_matrix or normal
+		"""
+		self.n_clusters = n_clusters
+		self.feat_patches = feat_patches
+		self.client = client or parallel.Client()
+		self.cache_dir = cache_dir
+		assert algo_name in ['KMeans', 'MiniBatchKMeans']
+		self.algo_name = algo_name
+		self.feat_to_kmeans_ = None
+		self.sparse_result = sparse_result
+		self.random_state = random_state
+		random.seed(random_state)
+	def fit(self, X, y = None):
+		"""
+		FITTING STEPS (unsupervised):
+		1. extract patches from original features based on feat_patches 
+		2. for each patch, train a clustering model, in parallel
+		"""
+		n_samples, n_features = X.shape
+		## set shared memory object for parallel computing
+		X_dir, X_path = self._persist_data(X, 'X')
+		## doing clustering in parallel
+		dv = self.client[:]
+		## cannot use dv.execute to do from_import
+		dv.block = False
+		async_result = dv.map(TriKmeansFeatures._train_model, 
+							zip(self.feat_patches, cycle([X_path]), 
+								cycle([self.n_clusters]), 
+								cycle([self.algo_name]), cycle([self.random_state])))
+		async_result.wait_interactive()
+		self.feat_to_kmeans_ = async_result.get()
+		shutil.rmtree(X_dir)
+		return self
+	def transform(self, X):
+		"""
+		feature transformation in sequential 
+		"""
+		tri_feats = []
+		for (feat_patch, kmeans) in self.feat_to_kmeans_:
+			dist_to_clusters = kmeans.transform(X[:, feat_patch])
+			meandist_per_cluster = np.mean(dist_to_clusters, axis = 0)
+			tri_feat = np.apply_along_axis(lambda row: np.maximum(0, meandist_per_cluster-row),
+											1, dist_to_clusters)
+			tri_feats.append(tri_feat)
+
+		tri_feats_X = sparse.coo_matrix(np.hstack(tri_feats)) if self.sparse_result else np.hstack(tri_feats)
+		return tri_feats_X
+	def fit_transform(self, X, y = None):
+		return self.fit(X, y).transform(X)
+
+	@staticmethod	
+	def _train_model(args):
+		from sklearn.externals import joblib
+		from sklearn.cluster import KMeans
+		from sklearn.cluster import MiniBatchKMeans
+		(feat_patch, X_path, n_clusters, algo_name, random_state) = args
+		algorithm = (KMeans(n_clusters, random_state = random_state) 
+							if algo_name == 'KMeans'
+							else MiniBatchKmeans(n_clusters, random_state = random_state))
+		X = joblib.load(X_path)
+		return (feat_patch, algorithm.fit(X[:, feat_patch]))
+	def _persist_data(self, X, X_name):
+		tmstamp = time.ctime().replace(' ', '_')
+		X_dir = path.abspath(path.join(self.cache_dir, tmstamp))
+		os.mkdir(X_dir)
+		X_path = path.join(X_dir, '%s.pkl' % X_name)
+		joblib.dump(X, X_path)
+		return (X_dir, X_path)
+
 
 ########### data partitioning ##################
 
@@ -17,8 +110,10 @@ def patch(data, rows, cols = None):
 	cols = iterator of cols (list) to select, None means selecting all cols 
 	return np.array (of the patch shape), but the DIM of return should be 
 	the same as data (1D or 2D)
+	if data is a sparse matrix, the return the matrix will be dense np.array
 	"""
-	data = np.asarray(data)
+	if not sparse.issparse(data):
+		data = np.asarray(data)
 	dim = get_dim(data)
 	if dim == 1:
 		## ignore cols
@@ -27,7 +122,10 @@ def patch(data, rows, cols = None):
 		nrows, ncols = data.shape
 		rows = rows if rows is not None else xrange(nrows)
 		cols = cols if cols is not None else  xrange(ncols)
-		return data[np.ix_(rows, cols)]
+		if sparse.issparse(data):
+			return data.toarray()[np.ix_(rows, cols)]
+		else:
+			return data[np.ix_(rows, cols)]
 	else:
 		raise RuntimeError('only supports 1D or 2D array') 
 
@@ -64,4 +162,7 @@ def get_dim(data):
 	"""
 	return the dimension of the data - 1D or 2D np.array
 	"""
-	return len(np.asarray(data).shape)
+	try:
+		return len(data.shape)
+	except:
+		return len(np.asarray(data).shape)

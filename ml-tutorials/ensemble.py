@@ -1,6 +1,13 @@
 ## Implementation of greedy ensemble package
 ## Ensemble is implemented as a folder with a programming API
 
+## LESSONS LEARNED: to be useful in parallel, everything should be implemented with
+## in-batch mode in mind
+
+## 
+## TODO - dump GreedyEnsemble to a mini-ensemble folder (same structure with ensemble)
+## TODO - adaptors for theano models
+
 import numpy as np 
 import os
 from os import path
@@ -11,7 +18,7 @@ from IPython import parallel
 from sklearn.base import BaseEstimator
 from functools import partial
 from scipy.stats import mode
-import copy
+import copy, random
 
 ################ greedy ensemble model class ################
 class GreedyEnsemble(BaseEstimator):
@@ -30,8 +37,9 @@ class GreedyEnsemble(BaseEstimator):
 		self.random_seed = random_seed
 		self.client = client or parallel.Client()
 		self.ensemble_ = []
-	def fit(self, model_names, data_type = 'validation_data', verbose = False):
+	def fit(self, model_names, data_type = 'validation_data', random_init = True, verbose = False):
 		"""
+		random_init = if the ensemble should start with a random model in candidates or the best model
 		Fitting algorithm = greedy search based on the performance measured by scoring fn
 		1. make predictions by model on data_type ('validation_data')
 		2. greedy search to fill in ensemble (ensemble intialized as empty)
@@ -39,7 +47,10 @@ class GreedyEnsemble(BaseEstimator):
 			2.2 evaluate ensemble performance by scorefn
 		"""
 		## always re-initialize the ensemble
-		self.ensemble_ = []
+		if random_init:
+			self.ensemble = [model_names[random.randint(0, len(model_names)-1)]]
+		else:
+			self.ensemble_ = []
 		## make predictions for all models
 		target, model_predictions = self._predict_by_model(model_names, data_type)
 		## greedy search
@@ -63,6 +74,13 @@ class GreedyEnsemble(BaseEstimator):
 		target, ensemble_predictions = self._predict_by_model(self.ensemble_, data_type)
 		combined_prediction = self.votefn(ensemble_predictions.values())
 		return combined_prediction
+	def save(self):
+		"""
+		SAVE relevant MODELS and DATA in ensemble into a mini-ensemble folder
+		so that the optimal ensemble can be continously merged with new solutions
+		in an aggressive way
+		"""
+		pass
 	def score(self, data_type):
 		target, ensemble_predictions = self._predict_by_model(self.ensemble_, data_type)
 		combined_prediction = self.votefn(ensemble_predictions.values())
@@ -81,22 +99,24 @@ class GreedyEnsemble(BaseEstimator):
 		n_models = len(model_names)
 		if n_models == 0:
 			raise RuntimeError('There should be at least one model to predict')
+		"""
 		dv = self.client[:]
 		is_probabilistic = dv.map(partial(read_model_meta, 
 									self.ensemble_path, 
 									keys=['is_probabilistic'], default=False), 
 								model_names)
-		"""
-		is_probabilistic = map(partial(read_model_meta, 
-									self.ensemble_path, 
-									keys=['is_probabilistic'], default=False), 
-								model_names)
-		"""
+		#is_probabilistic = map(partial(read_model_meta, 
+		#							self.ensemble_path, 
+		#							keys=['is_probabilistic'], default=False), 
+		#						model_names)
 		print 'THIS STEP DONE'
 		is_probabilistic = [d['is_probabilistic'] for d in is_probabilistic]
+		"""
+		## decided by the 'is_probabilistic' field in the model config
+		is_probabilistic = [None for _ in xrange(n_models)]
 		data_types = [data_type for _ in xrange(n_models)]
 		params = zip(model_names, data_types, is_probabilistic)
-		results = parallel_predict_model(self.ensemble_path, params, self.client, verbose=False)
+		results = parallel_predict_model(self.ensemble_path, params, self.client, verbose=True)
 		target = results[0][1][0]
 		return (target, {mdl_name : yhat for (mdl_name, (y, yhat)) in results})
 	def _greedy_search(self, candidate_predictions, init_ensemble, target, data_type, verbose):
@@ -111,7 +131,7 @@ class GreedyEnsemble(BaseEstimator):
 		
 		model_predictions.update(candidate_predictions)
 
-		candidates = set(candidate_predictions.keys())
+		candidates = set([m for m in candidate_predictions.keys() if m not in init_ensemble])
 		#print 'ensemble', ensemble
 		while candidates:
 			scores = [(m, self.scorefn(target, 
@@ -153,6 +173,17 @@ def new_ensemble(ensemble_name, container_path):
 	_new_json_file(_get_path(ensemble_path, 'data_json'))
 	_new_json_file(_get_path(ensemble_path, 'models_json'))
 	return ensemble_path
+
+def all_model_names(ensemble_path):
+	models_json_path = _get_path(ensemble_path, 'models_json')
+	model_records = _read_json_record(models_json_path, keys = None)
+	return model_records.keys()
+
+def all_data_names(ensemble_path):
+	data_json_path = _get_path(ensemble_path, 'data_json')
+	data_records = _read_json_record(data_json_path, keys = None)
+	return data_records.keys()
+
 
 ## remove_ensemble - rm -fR ensemble_folder
 
@@ -351,6 +382,7 @@ def predict_model(ensemble_path, model_name, data_type, probabilistic):
 	if data_type not in model_record:
 		raise RuntimeError('data type ' + data_type + 'NOT in model config')
 	## load data
+	probabilistic = probabilistic or model_record.get('is_probabilistic', False)
 	_, (X, y) = load_data(ensemble_path, model_record[data_type])
 	predict = model.predict_proba if probabilistic else model.predict
 	return (model_name, (y, predict(X)))
@@ -383,13 +415,16 @@ def _parallel(tasks, client, verbose = True):
 	dv.execute('cd %s' % current_folder)
 	dv.execute('import ensemble')
 	dv.execute('reload(ensemble)')
-	"""
+	
 	## method 1: dispatch tasks
+	dv.block = False
 	fn_tasks = [(fn_or_fname 
 					if not isinstance(fn_or_fname, str) 
 					else parallel.Reference(fn_or_fname), kwparams)
 						for (fn_or_fname, kwparams) in tasks]
-	return dv.map(lambda (fn, kwparams): fn(**kwparams), fn_tasks)
+	asyn_results = dv.map(lambda (fn, kwparams): fn(**kwparams), fn_tasks)
+	asyn_results.wait_interactive()
+	return asyn_results.get()
 	"""
 	## method 2: dispatch tasks
 	lb = client.load_balanced_view()
@@ -409,6 +444,7 @@ def _parallel(tasks, client, verbose = True):
 				pre_n_finished = n_finished
 		print 'Parallel Progress: DONE'
 	return [ar.get() for ar in asyn_results]
+	"""
 
 ## io from/to disk ###
 def _persist(stuff_path, stuff):

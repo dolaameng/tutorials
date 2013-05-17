@@ -17,8 +17,23 @@ from IPython import parallel
 from functools import partial
 from itertools import cycle
 from scipy import sparse
+from sklearn.kernel_approximation import Nystroem
 
 ########### feature transformation #############
+def kernel_approximation(Xs, client,  *args, **kwargs):
+	"""
+	Currently using Nystroem sampler to do the approximation 
+	Xs = list of data to transform for kernel approximation
+	*args, **kwargs = parameters to the Nystroem sampler 
+	e.g., n_components, kernel {'rbf', 'polynomial', ...},
+	gamma, random_state, degree and etc.
+	"""
+	dv = client[:]
+	dv.block = True
+	return dv.map(lambda (sampler, X): sampler.fit_transform(X), 
+				zip([Nystroem(*args, **kwargs) for _ in range(len(Xs))], Xs))
+
+
 class TriKmeansFeatures(BaseEstimator):
 	def __init__(self, n_clusters, feat_patches, client,
 					cache_dir = '/tmp', algo_name = 'KMeans', 
@@ -78,9 +93,37 @@ class TriKmeansFeatures(BaseEstimator):
 
 		tri_feats_X = sparse.coo_matrix(np.hstack(tri_feats)) if self.sparse_result else np.hstack(tri_feats)
 		return tri_feats_X
+	def transform_parallel(self, X):
+		"""
+		feature transformation in parallel
+		"""
+		dv = self.client[:]
+		dv.block = True
+		X_dir, X_path = self._persist_data(X, 'X')
+		tri_feats = dv.map(TriKmeansFeatures._transform, zip(self.feat_to_kmeans_, cycle([X_path])))
+		tri_feats_X = sparse.coo_matrix(np.hstack(tri_feats)) if self.sparse_result else np.hstack(tri_feats)
+		shutil.rmtree(X_dir)
+		return tri_feats_X
 	def fit_transform(self, X, y = None):
 		return self.fit(X, y).transform(X)
 
+	@staticmethod 
+	def _transform(args):
+		"""
+		DOEST NOT WORK
+		"""
+		raise RuntimeError('NOT IMPLEMENTED YET')
+		(feat_patch, kmeans), X_path = args
+		from sklearn.externals import joblib
+		#from sklearn.cluster import KMeans
+		#from sklearn.cluster import MiniBatchKMeans
+		import numpy as np
+		X = joblib.load(X_path)
+		dist_to_clusters = kmeans.transform(X[:, feat_patch])
+		meandist_per_cluster = np.mean(dist_to_clusters, axis = 0)
+		tri_feat = np.apply_along_axis(lambda row: np.maximum(0, meandist_per_cluster-row),
+											1, dist_to_clusters)
+		return tri_feat
 	@staticmethod	
 	def _train_model(args):
 		from sklearn.externals import joblib
@@ -166,3 +209,11 @@ def get_dim(data):
 		return len(data.shape)
 	except:
 		return len(np.asarray(data).shape)
+
+def _persist_data(self, X, X_name):
+	tmstamp = time.ctime().replace(' ', '_')
+	X_dir = path.abspath(path.join(self.cache_dir, tmstamp))
+	os.mkdir(X_dir)
+	X_path = path.join(X_dir, '%s.pkl' % X_name)
+	joblib.dump(X, X_path)
+	return (X_dir, X_path)

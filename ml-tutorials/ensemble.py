@@ -19,6 +19,7 @@ from sklearn.base import BaseEstimator
 from functools import partial
 from scipy.stats import mode
 import copy, random
+from sklearn import metrics
 
 ################ greedy ensemble model class ################
 class GreedyEnsemble(BaseEstimator):
@@ -83,6 +84,24 @@ class GreedyEnsemble(BaseEstimator):
 		yarr = np.vstack(yhats)
 		y_mode = mode(yarr)[0][0]
 		return y_mode.astype(np.int)
+	@staticmethod
+	def vote_average(yhats):
+		return sum(yhats) * 1. / len(yhats)
+	@staticmethod
+	def score_label_classification(y, yhat):
+		"""
+		both y and yhat are class labels 
+		"""
+		return metrics.accuracy_score(y, yhat)
+	@staticmethod
+	def score_label_prob_classification(y, yhat):
+		"""
+		y is the label of truth - usually of shape (n, )
+		yhat is the dummy representation of probabilities of each class (n, C) 
+		"""
+		y_classes = np.unique(y) # already sorted
+		yhat_label = np.array([y_classes[i] for i in np.argmax(yhat, axis = 1)])
+		return GreedyEnsemble.score_label_classification(y, yhat_label)
 	def _predict_by_model(self, model_names, data_type):
 		"""
 		Use predict() to predict if 'is_probabilistic' is None or False in model config,

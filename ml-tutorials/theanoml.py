@@ -73,22 +73,22 @@ class LogisticRegression(BaseEstimator):
 		## negative_log_likelihood, score - y related
 		## g_W, g_b
 		pass
-	def _build_symbols(self):
+	def _build_symbols(self, batch_X, batch_y):
 		"""
 		batch_X = TensorObject based on shared object 
 		batch_y = TensorOjbect based on shared object
 		"""
-		batch_X = T.matrix('batch_X')
-		batch_y = T.ivector('batch_y')
+		#batch_X = T.matrix('batch_X')
+		#batch_y = T.ivector('batch_y')
 		## shape information
-		n_feats = 1 #batch_X.shape[1]
-		n_samples = 1 #batch_X.shape[0]
+		n_samples = batch_X.shape[0]
+		n_feats = batch_X.shape[1]
 		n_classes = len(self.classes)
 		classes = theano.shared(np.asarray(self.classes), 'classes')
-		W = theano.shared(value=np.array((n_feats, n_classes), 
+		W = theano.shared(value=np.zeros((n_feats, n_classes), 
 								dtype=theano.config.floatX),
 							name = 'W', borrow = True)
-		b = theano.shared(value=np.array((n_classes,), 
+		b = theano.shared(value=np.zeros((n_classes,), 
 								dtype=theano.config.floatX),
 							name = 'b', borrow = True)
 		p_y_given_x = T.nnet.softmax(T.dot(batch_X, W) + b)

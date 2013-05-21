@@ -58,6 +58,7 @@ class LogisticRegression(BaseEstimator):
 		n_validation_batches = v_validation_X.get_value(borrow=True).shape[0] / batch_size
 		## iterative optimization
 		## TODO - ??
+	"""
 	def _build_train_model(self, v_train_X, v_train_y, batch_size, learning_rate):
 		index = T.lscalar()
 		X = T.matrix('X')
@@ -74,6 +75,8 @@ class LogisticRegression(BaseEstimator):
 						y: v_train_y[index * batch_size: (index + 1) * batch_size],
 					})
 		return train_model
+	"""
+	"""
 	def _build_validate_model(self, v_validation_X, v_validation_y, batch_size):
 		index = T.lscalar()
 		X = T.matrix('X')
@@ -85,6 +88,27 @@ class LogisticRegression(BaseEstimator):
 						X: v_validation_X[index * batch_size: (index + 1) * batch_size],
 						y: v_validation_y[index * batch_size: (index + 1) * batch_size],
 					})
+		return validate_model
+	"""
+	def _build_train_model(self, v_train_X, v_train_y, batch_size, learning_rate):
+		index = T.lscalar()
+		X = v_train_X[index * batch_size: (index + 1) * batch_size]
+		y = v_train_y[index * batch_size: (index + 1) * batch_size]
+		cost, error = self._build_symbols(X, y)
+		g_W, g_b = T.grad(cost = cost, wrt = [self.W_, self.b_])
+		updates = [(self.W_, self.W_ - learning_rate*g_W), 
+				   (self.b_, self.b_ - learning_rate*g_b)]
+		train_model = theano.function(inputs = [index],
+						outputs = cost, 
+						updates = updates)
+		return train_model
+	def _build_validate_model(self, v_validation_X, v_validation_y, batch_size):
+		index = T.lscalar()
+		X = v_validation_X[index * batch_size: (index + 1) * batch_size]
+		y = v_validation_y[index * batch_size: (index + 1) * batch_size]
+		_, error = self._build_symbols(X, y)
+		validate_model = theano.function(inputs = [index],
+					outputs = error)
 		return validate_model
 	def _build_predict_model(self, v_X):
 		X = T.matrix('X')

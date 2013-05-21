@@ -11,10 +11,14 @@ from sklearn.cross_validation import train_test_split
 
 class LogisticRegression(BaseEstimator):
 	def __init__(self, classes, validation_size = 0.2, 
-				optimizer = 'sgd'):
+				optimizer = 'sgd', verbose = True):
+		if not all(classes == range(len(classes))):
+			raise RuntimeError('classes need to be coded as exactly range(n_class)')
 		self.classes = classes
 		self.validation_size = validation_size
 		self.optimize = self._sgd if optimizer == 'sgd' else self._cg
+		self.verbose = verbose
+		self.W_, self.b_ = None, None
 	def fit(self, X, y):
 		## split and share data
 		train_X, validation_X, train_y, validation_y = train_test_split(
@@ -37,17 +41,36 @@ class LogisticRegression(BaseEstimator):
 							name = 'W', borrow = True)
 		## optimize
 		self.optimize(v_train_X, v_train_y, v_validation_X, v_validation_y)
+	def partial_fit(self, X, y):
+		"""
+		increamental learning model for new data
+		"""
+		if self.W_ is None or self.b_ is None:
+			self.fit(X, y)
+		else:
+			## split and share data
+			train_X, validation_X, train_y, validation_y = train_test_split(
+									X, y, test_size = self.validation_size)
+			v_train_X = self._share_data(train_X)
+			v_validation_X = self._share_data(validation_X)
+			v_train_y = self._share_data(train_y, dtype='int32')
+			v_validation_y = self._share_data(validation_y, dtype='int32')
+			## optimize
+			self.optimize(v_train_X, v_train_y, v_validation_X, v_validation_y)
 	def predict(self, X):
 		return self._predict(X)[0]
 	def predict_proba(self, X):
 		return self._predict(X)[1]
+	def score(self, X, y):
+		cost, error = self._build_symbols(X, y)
+		return error.eval()
 	def _predict(self, X):
 		v_X = self._share_data(X)
 		predict_model = self._build_predict_model(v_X)
 		y_pred, p_y_given_x = predict_model()
 		return y_pred, p_y_given_x
 	def _sgd(self, v_train_X, v_train_y, v_validation_X, v_validation_y,
-		learning_rate = 0.13, n_epochs = 1000, batch_size = 600):
+		learning_rate = 0.13, n_epochs = 1000, batch_size = 10):
 		## symoblic model functions
 		train_model = self._build_train_model(v_train_X, v_train_y, 
 							batch_size, learning_rate)
@@ -57,7 +80,59 @@ class LogisticRegression(BaseEstimator):
 		n_train_batches = v_train_X.get_value(borrow=True).shape[0] / batch_size
 		n_validation_batches = v_validation_X.get_value(borrow=True).shape[0] / batch_size
 		## iterative optimization
-		## TODO - ??
+		## ALGORITHM: iter through epoch -> iter through mini-batch in train
+		## check validation performance if it is time; 
+		## increase patience limit if validation performance is getting significantly better
+		## stop if we run out of patience
+		## ITERATION PARAMETERS
+		## look at this many examples regardless
+		patience = 5000
+		## how much more patience gained when a new significant best achieved
+		patience_increase = 2
+		## how much improvement is considered significant
+		improvement_threshold = 0.995
+		## frequency of doing validation through iterative optimization
+		## now we check it every mini_train_batch
+		validation_frequency = min(n_train_batches, patience / 2)
+		## iterative process
+		epoch = 0
+		out_of_patience = False
+		best_validation_error = np.inf 
+		best_params = self.W_, self.b_
+		## each epoch till running out o fpatience
+		while (epoch < n_epochs) and (not out_of_patience):
+			epoch += 1
+			## each mini train batch
+			for minibatch_index in xrange(n_train_batches):
+				## train the model
+				minibatch_cost = train_model(minibatch_index)
+				## update the total iteration number
+				iter = (epoch - 1) * n_train_batches + minibatch_index
+				## do validation when it is time
+				if (iter+1) % validation_frequency == 0:
+					## get the current validation error rate
+					this_validation_error = np.mean([validate_model(i)
+													for i in xrange(n_validation_batches)])
+					if self.verbose:
+						print 'epoch %i, minibatch %i/%i, validation error %f %%' % (
+							epoch, minibatch_index+1, n_train_batches,
+							this_validation_error * 100.
+						)
+					## increase the patience if a significant improvement is found
+					if this_validation_error < best_validation_error:
+						if this_validation_error < best_validation_error * improvement_threshold:
+							patience = max(patience, iter*patience_increase)
+						best_validation_error = this_validation_error
+						best_params = [self.W_, self.b_]
+				## if running out of patience, quit the iterative optimization
+				if patience <= iter:
+					out_of_patience = True
+					break
+		if self.verbose:
+			print 'Optimization complete with best validation score %f %%' % (best_validation_error * 100.)
+		## save the best found params based on the validation performance
+		self.W_, self.b_ = best_params
+
 	"""
 	def _build_train_model(self, v_train_X, v_train_y, batch_size, learning_rate):
 		index = T.lscalar()
@@ -125,6 +200,7 @@ class LogisticRegression(BaseEstimator):
 		classes = theano.shared(value = self.classes, borrow = True)
 		y_pred = classes[T.argmax(p_y_given_x, axis = 1).reshape((-1,))]
 		error = T.mean(T.neq(y_pred, y))
+		## HERE NEEDS Y TO BE EXACTULY 0..N_CLASS-1
 		negative_log_likelihood = -T.mean(T.log(p_y_given_x)[T.arange(y.shape[0]),y])
 		return negative_log_likelihood, error
 	def _share_data(self, data, dtype=theano.config.floatX):

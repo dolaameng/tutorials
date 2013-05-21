@@ -20,34 +20,29 @@ class LogisticRegression(BaseEstimator):
 		self.verbose = verbose
 		self.W_, self.b_ = None, None
 	def fit(self, X, y):
-		## split and share data
-		train_X, validation_X, train_y, validation_y = train_test_split(
-									X, y, test_size = self.validation_size)
-		v_train_X = self._share_data(train_X)
-		v_validation_X = self._share_data(validation_X)
-		v_train_y = self._share_data(train_y, dtype='int32')
-		v_validation_y = self._share_data(validation_y, dtype='int32')
+		## re-initialize the parameters anyway
 		self.n_feats =  X.shape[1]
 		self.n_classes = len(self.classes)
+		## initialize parameters
+		self.W_ = theano.shared(value = np.zeros((self.n_feats, self.n_classes),
+									dtype = theano.config.floatX),
+							name = 'W', borrow = True)
+		self.b_ = theano.shared(value = np.zeros((self.n_classes),
+									dtype = theano.config.floatX),
+							name = 'W', borrow = True)
 		
 		## optimize
-		self.optimize(v_train_X, v_train_y, v_validation_X, v_validation_y, partial=False)
+		self.optimize(X, y)
 	def partial_fit(self, X, y):
 		"""
 		increamental learning model for new data
 		"""
-		## split and share data
-		train_X, validation_X, train_y, validation_y = train_test_split(
-								X, y, test_size = self.validation_size)
-		v_train_X = self._share_data(train_X)
-		v_validation_X = self._share_data(validation_X)
-		v_train_y = self._share_data(train_y, dtype='int32')
-		v_validation_y = self._share_data(validation_y, dtype='int32')
+		## only re-initialize parameter the first time
 		if self.W_ is None or self.b_ is None:
-			self.n_feats =  X.shape[1]
-			self.n_classes = len(self.classes)
-		## optimize
-		self.optimize(v_train_X, v_train_y, v_validation_X, v_validation_y, partial=True)
+			self.fit(X, y)
+		else:
+			## optimize directly
+			self.optimize(X, y)
 	def predict(self, X):
 		return self._predict(X)[0]
 	def predict_proba(self, X):
@@ -60,19 +55,18 @@ class LogisticRegression(BaseEstimator):
 		predict_model = self._build_predict_model(v_X)
 		y_pred, p_y_given_x = predict_model()
 		return y_pred, p_y_given_x
-	def _sgd(self, v_train_X, v_train_y, v_validation_X, v_validation_y,
-		learning_rate = 0.13, n_epochs = 1000, batch_size = 600, partial=False):
+	def _sgd(self, X, y, learning_rate = 0.13, 
+			n_epochs = 1000, batch_size = 600):
+		## split and share data
+		train_X, validation_X, train_y, validation_y = train_test_split(
+									X, y, test_size = self.validation_size)
+		v_train_X = self._share_data(train_X)
+		v_validation_X = self._share_data(validation_X)
+		v_train_y = self._share_data(train_y, dtype='int32')
+		v_validation_y = self._share_data(validation_y, dtype='int32')
 		## shape information
 		## for params used to interact raw_data and tensor_data
 		## get them as early as possible
-		if not partial or self.W_ is None:
-			## initialize parameters
-			self.W_ = theano.shared(value = np.zeros((self.n_feats, self.n_classes),
-											dtype = theano.config.floatX),
-							name = 'W', borrow = True)
-			self.b_ = theano.shared(value = np.zeros((self.n_classes),
-											dtype = theano.config.floatX),
-							name = 'W', borrow = True)
 		## symoblic model functions
 		train_model = self._build_train_model(v_train_X, v_train_y, 
 							batch_size, learning_rate)

@@ -27,36 +27,27 @@ class LogisticRegression(BaseEstimator):
 		v_validation_X = self._share_data(validation_X)
 		v_train_y = self._share_data(train_y, dtype='int32')
 		v_validation_y = self._share_data(validation_y, dtype='int32')
-		## shape information
-		## for params used to interact raw_data and tensor_data
-		## get them as early as possible
 		self.n_feats =  X.shape[1]
 		self.n_classes = len(self.classes)
-		## initialize parameters
-		self.W_ = theano.shared(value = np.zeros((self.n_feats, self.n_classes),
-											dtype = theano.config.floatX),
-							name = 'W', borrow = True)
-		self.b_ = theano.shared(value = np.zeros((self.n_classes),
-											dtype = theano.config.floatX),
-							name = 'W', borrow = True)
+		
 		## optimize
-		self.optimize(v_train_X, v_train_y, v_validation_X, v_validation_y)
+		self.optimize(v_train_X, v_train_y, v_validation_X, v_validation_y, partial=False)
 	def partial_fit(self, X, y):
 		"""
 		increamental learning model for new data
 		"""
+		## split and share data
+		train_X, validation_X, train_y, validation_y = train_test_split(
+								X, y, test_size = self.validation_size)
+		v_train_X = self._share_data(train_X)
+		v_validation_X = self._share_data(validation_X)
+		v_train_y = self._share_data(train_y, dtype='int32')
+		v_validation_y = self._share_data(validation_y, dtype='int32')
 		if self.W_ is None or self.b_ is None:
-			self.fit(X, y)
-		else:
-			## split and share data
-			train_X, validation_X, train_y, validation_y = train_test_split(
-									X, y, test_size = self.validation_size)
-			v_train_X = self._share_data(train_X)
-			v_validation_X = self._share_data(validation_X)
-			v_train_y = self._share_data(train_y, dtype='int32')
-			v_validation_y = self._share_data(validation_y, dtype='int32')
-			## optimize
-			self.optimize(v_train_X, v_train_y, v_validation_X, v_validation_y)
+			self.n_feats =  X.shape[1]
+			self.n_classes = len(self.classes)
+		## optimize
+		self.optimize(v_train_X, v_train_y, v_validation_X, v_validation_y, partial=True)
 	def predict(self, X):
 		return self._predict(X)[0]
 	def predict_proba(self, X):
@@ -70,7 +61,18 @@ class LogisticRegression(BaseEstimator):
 		y_pred, p_y_given_x = predict_model()
 		return y_pred, p_y_given_x
 	def _sgd(self, v_train_X, v_train_y, v_validation_X, v_validation_y,
-		learning_rate = 0.13, n_epochs = 1000, batch_size = 10):
+		learning_rate = 0.13, n_epochs = 1000, batch_size = 600, partial=False):
+		## shape information
+		## for params used to interact raw_data and tensor_data
+		## get them as early as possible
+		if not partial or self.W_ is None:
+			## initialize parameters
+			self.W_ = theano.shared(value = np.zeros((self.n_feats, self.n_classes),
+											dtype = theano.config.floatX),
+							name = 'W', borrow = True)
+			self.b_ = theano.shared(value = np.zeros((self.n_classes),
+											dtype = theano.config.floatX),
+							name = 'W', borrow = True)
 		## symoblic model functions
 		train_model = self._build_train_model(v_train_X, v_train_y, 
 							batch_size, learning_rate)
@@ -133,38 +135,6 @@ class LogisticRegression(BaseEstimator):
 		## save the best found params based on the validation performance
 		self.W_, self.b_ = best_params
 
-	"""
-	def _build_train_model(self, v_train_X, v_train_y, batch_size, learning_rate):
-		index = T.lscalar()
-		X = T.matrix('X')
-		y = T.ivector('y')
-		cost, error = self._build_symbols(X, y)
-		g_W, g_b = T.grad(cost = cost, wrt = [self.W_, self.b_])
-		updates = [(self.W_, self.W_ - learning_rate*g_W), 
-				   (self.b_, self.b_ - learning_rate*g_b)]
-		train_model = theano.function(inputs = [index],
-						outputs = cost, 
-						updates = updates,
-						givens = {
-						X: v_train_X[index * batch_size: (index + 1) * batch_size],
-						y: v_train_y[index * batch_size: (index + 1) * batch_size],
-					})
-		return train_model
-	"""
-	"""
-	def _build_validate_model(self, v_validation_X, v_validation_y, batch_size):
-		index = T.lscalar()
-		X = T.matrix('X')
-		y = T.ivector('y')
-		_, error = self._build_symbols(X, y)
-		validate_model = theano.function(inputs = [index],
-					outputs = error, 
-					givens = {
-						X: v_validation_X[index * batch_size: (index + 1) * batch_size],
-						y: v_validation_y[index * batch_size: (index + 1) * batch_size],
-					})
-		return validate_model
-	"""
 	def _build_train_model(self, v_train_X, v_train_y, batch_size, learning_rate):
 		index = T.lscalar()
 		X = v_train_X[index * batch_size: (index + 1) * batch_size]

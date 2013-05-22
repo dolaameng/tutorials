@@ -11,12 +11,22 @@ from sklearn.cross_validation import train_test_split
 
 class LogisticRegression(BaseEstimator):
 	def __init__(self, classes, validation_size = 0.2, 
-				optimizer = 'sgd', verbose = True):
+				optimizer = 'sgd', n_epochs = None, batch_size = None,
+				learning_rate = None, verbose = True):
+		"""
+		optimizer = {'sgd', 'cg'}, generally 'sgd' for large scale and 'cg' for smaller data
+		n_epochs = number of iterations for minibatch learning, 1000 for sgd, 50 for cg
+		batch_size = size of the minibatch
+		learning_rate = only effective for sgd learning
+		"""
 		if not all(classes == range(len(classes))):
 			raise RuntimeError('classes need to be coded as exactly range(n_class)')
 		self.classes = classes
 		self.validation_size = validation_size
 		self.optimize = self._sgd if optimizer == 'sgd' else self._cg
+		self.n_epochs = n_epochs
+		self.batch_size = batch_size
+		self.learning_rate = learning_rate
 		self.verbose = verbose
 		self.W_, self.b_ = None, None
 	def fit(self, X, y):
@@ -24,13 +34,22 @@ class LogisticRegression(BaseEstimator):
 		self.n_feats =  X.shape[1]
 		self.n_classes = len(self.classes)
 		## initialize parameters
-		self.W_ = theano.shared(value = np.zeros((self.n_feats, self.n_classes),
+		if self.optimize == self._cg:
+			self.theta_ = theano.shared(value = np.zeros(self.n_feats*self.n_classes+self.n_classes, 
+													dtype = theano.config.floatX),
+									name = 'theta',
+									borrow = True)
+			self.W_ = self.theta_[:self.n_feats*self.n_classes].reshape((self.n_feats, self.n_classes))
+			self.b_ = self.theta_[self.n_feats*self.n_classes:]
+		elif self.optimize == self._sgd:
+			self.W_ = theano.shared(value = np.zeros((self.n_feats, self.n_classes),
 									dtype = theano.config.floatX),
 							name = 'W', borrow = True)
-		self.b_ = theano.shared(value = np.zeros((self.n_classes),
+			self.b_ = theano.shared(value = np.zeros((self.n_classes),
 									dtype = theano.config.floatX),
 							name = 'W', borrow = True)
-		
+		else:
+			raise RuntimeError('Unimplemented Optimization Method')
 		## optimize
 		self.optimize(X, y)
 	def partial_fit(self, X, y):
@@ -55,8 +74,11 @@ class LogisticRegression(BaseEstimator):
 		predict_model = self._build_predict_model(v_X)
 		y_pred, p_y_given_x = predict_model()
 		return y_pred, p_y_given_x
-	def _sgd(self, X, y, learning_rate = 0.13, 
-			n_epochs = 1000, batch_size = 600):
+	def _sgd(self, X, y):
+		learning_rate = self.learning_rate or 0.13
+		n_epochs = self.n_epochs or 1000
+		batch_size = self.batch_size or 600
+		print 'Training LogisticRegression modle with SGD ...'
 		## split and share data
 		train_X, validation_X, train_y, validation_y = train_test_split(
 									X, y, test_size = self.validation_size)
@@ -129,6 +151,50 @@ class LogisticRegression(BaseEstimator):
 		## save the best found params based on the validation performance
 		self.W_, self.b_ = best_params
 
+	def _cg(self, X, y):
+		n_epochs = self.n_epochs or 50
+		batch_size = self.batch_size or 600
+		print 'Training LogisticRegression modle with CG ...'
+		## split and share data
+		train_X, validation_X, train_y, validation_y = train_test_split(
+									X, y, test_size = self.validation_size)
+		v_train_X = self._share_data(train_X)
+		v_validation_X = self._share_data(validation_X)
+		v_train_y = self._share_data(train_y, dtype='int32')
+		v_validation_y = self._share_data(validation_y, dtype='int32')
+		## build symoblic models
+		validate_model = self._build_validate_model(v_validation_X, 
+					v_validation_y, batch_size)
+		train_cost = self._build_train_cost(v_train_X,
+					v_train_y, batch_size)
+		train_grad = self._build_train_grad(v_train_X,
+					v_train_y, batch_size)
+		## number of batches
+		n_train_batches = v_train_X.get_value(borrow=True).shape[0] / batch_size
+		n_validation_batches = v_validation_X.get_value(borrow=True).shape[0] / batch_size
+		## build helper functions for scipy optimize
+		def train_fn(theta_value):
+			self.theta_.set_value(theta_value, borrow = True)
+			train_loss = np.mean([train_cost(i) for i in xrange(n_train_batches)])
+			return train_loss
+		def train_fn_grad(theta_value):
+			self.theta_.set_value(theta_value, borrow = True)
+			grad = sum([train_grad(i) for i in xrange(n_train_batches)]) / n_train_batches
+			return grad
+		def callback(theta_value):
+			self.theta_.set_value(theta_value, borrow = True)
+			validation_loss = np.mean([validate_model(i) for i in xrange(n_validation_batches)])
+			print 'validation error', validation_loss
+		import scipy.optimize
+		best_theta = scipy.optimize.fmin_cg(
+			f = train_fn,
+			x0 = np.zeros((self.n_feats+1)*self.n_classes, dtype = v_train_X.dtype),
+			fprime = train_fn_grad,
+			callback = callback if self.verbose else None,
+			disp = 0,
+			maxiter = n_epochs
+		)
+		self.theta_.set_value(best_theta, borrow=True)
 	def _build_train_model(self, v_train_X, v_train_y, batch_size, learning_rate):
 		index = T.lscalar()
 		X = v_train_X[index * batch_size: (index + 1) * batch_size]
@@ -141,6 +207,22 @@ class LogisticRegression(BaseEstimator):
 						outputs = cost, 
 						updates = updates)
 		return train_model
+	def _build_train_cost(self, v_train_X, v_train_y, batch_size):
+		index = T.lscalar()
+		X = v_train_X[index * batch_size: (index + 1) * batch_size]
+		y = v_train_y[index * batch_size: (index + 1) * batch_size]
+		cost, error = self._build_symbols(X, y)
+		train_cost = theano.function(inputs = [index],
+						outputs = cost)
+		return train_cost
+	def _build_train_grad(self, v_train_X, v_train_y, batch_size):
+		index = T.lscalar()
+		X = v_train_X[index * batch_size: (index + 1) * batch_size]
+		y = v_train_y[index * batch_size: (index + 1) * batch_size]
+		cost, error = self._build_symbols(X, y)
+		train_grad = theano.function(inputs = [index],
+						outputs = T.grad(cost, self.theta_))
+		return train_grad
 	def _build_validate_model(self, v_validation_X, v_validation_y, batch_size):
 		index = T.lscalar()
 		X = v_validation_X[index * batch_size: (index + 1) * batch_size]

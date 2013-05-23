@@ -117,7 +117,7 @@ class LogisticRegression(BaseEstimator):
 		out_of_patience = False
 		best_validation_error = np.inf 
 		best_params = self.W_, self.b_
-		## each epoch till running out o fpatience
+		## each epoch till running out o patience
 		while (epoch < n_epochs) and (not out_of_patience):
 			epoch += 1
 			## each mini train batch

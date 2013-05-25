@@ -19,3 +19,5 @@
 import logistic_regression
 import formula
 import mlp
+import lenet
+import autoencoder

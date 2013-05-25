@@ -52,16 +52,18 @@ class LogisticRegression(BaseEstimator):
 			raise RuntimeError('Unimplemented Optimization Method')
 		## optimize
 		self.optimize(X, y)
+		return self 
 	def partial_fit(self, X, y):
 		"""
 		increamental learning model for new data
 		"""
 		## only re-initialize parameter the first time
 		if self.W_ is None or self.b_ is None:
-			self.fit(X, y)
+			return self.fit(X, y)
 		else:
 			## optimize directly
 			self.optimize(X, y)
+			return self
 	def predict(self, X):
 		return self._predict(X)[0]
 	def predict_proba(self, X):

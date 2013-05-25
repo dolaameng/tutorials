@@ -11,6 +11,9 @@
 import theano
 import theano.tensor as T
 import numpy as np
+from theano.tensor.signal import downsample
+from theano.tensor.nnet import conv
+import sys
 
 def share_data(data, dtype = theano.config.floatX):
 	"""
@@ -28,18 +31,20 @@ class LogisticRegressionFormula(object):
 	def __init__(self, n_in, n_out):
 		self.n_in = n_in
 		self.n_out = n_out
-	## X related formula
-	def bind_input(self, X):
-		n_in, n_out = self.n_in, self.n_out
 		self.W = theano.shared(value = np.zeros((n_in, n_out), 
 												dtype = theano.config.floatX),
 								name = 'logistic_regression_W', borrow = True)
 		self.b = theano.shared(value = np.zeros((n_out, ), 
 												dtype = theano.config.floatX),
 								name = 'logistic_regression_b', borrow = True)
+		self.params = [self.W, self.b]
+	## X related formula
+	def bind_input(self, X):
+		n_in, n_out = self.n_in, self.n_out
+		
 		self.p_y_given_x = T.nnet.softmax(T.dot(X, self.W) + self.b)
 		self.y_pred = T.argmax(self.p_y_given_x, axis = 1)
-		self.params = [self.W, self.b]
+		
 	## X, y related formula
 	def negative_log_likelihood(self, y):
 		"""
@@ -84,6 +89,7 @@ class HiddenLayerFormula(object):
 			b_value = np.zeros((n_out, ), dtype = theano.config.floatX)
 			b = theano.shared(value = b_value, name = 'hidden_layer_b', borrow = True)
 		self.W, self.b = W, b
+		self.params = [self.W, self.b]
 	def bind_input(self, X):
 		"""
 		rng = random generator seed
@@ -95,7 +101,6 @@ class HiddenLayerFormula(object):
 		## output
 		lin_output = T.dot(X, self.W) + self.b
 		self.output = lin_output if self.activation is None else self.activation(lin_output) 
-		self.params = [self.W, self.b]
 	def prediction(self, X):
 		"""
 		X = tensor variable, probabily a shared object to faciliatate GPU calculation
@@ -104,6 +109,150 @@ class HiddenLayerFormula(object):
 		"""
 		lin_output = T.dot(X, self.W) + self.b
 		return lin_output if self.activation is None else self.activation(lin_output)
+
+
+class LeNetConvPoolLayerFormula(object):
+	"""
+	Pool Layer of a convolutional network
+	"""
+	def __init__(self, rng, filter_shape, image_shape, poolsize=(2, 2)):
+		"""
+		rng = np.random.RandomState
+		filter_shape = (n_filters, n_input_feats_maps, filter_height, filter_width)
+		image_shape = (batch_size, n_input_feats_maps, img_height, img_width)
+		poolsize = the downsampling (pooling) factor (n_rows, n_cols)
+		"""
+		assert image_shape[1] == filter_shape[1]
+		self.rng = rng
+		self.filter_shape = filter_shape
+		self.image_shape = image_shape
+		self.poolsize = poolsize
+
+		## n_input_feats_maps * filter_ht * filter_wd inputs to 
+		## each hidden unit
+		fan_in = np.prod(filter_shape[1:])
+		## each unit in the lower layer receives a gradient from
+		## n_output_feats_maps * filter_ht * filter_wd / poolsize
+		fan_out = (filter_shape[0] * np.prod(filter_shape[2:]) 
+						/ np.prod(poolsize))
+		## initalize weights
+		W_bound = np.sqrt(6. / (fan_in + fan_out))
+		self.W = theano.shared(np.asarray(rng.uniform(
+                                        low = -W_bound,
+                                        high = W_bound,
+                                        size = filter_shape), 
+                                        dtype=theano.config.floatX),
+                                borrow = True)
+		b_values = np.zeros((filter_shape[0], ), 
+						dtype = theano.config.floatX)
+		self.b = theano.shared(value = b_values, borrow = True)
+		self.params = [self.W, self.b]
+	def bind_input(self, X):
+		"""
+		X = input, theano.tensor.dtensor4
+		"""
+		filter_shape, image_shape = self.filter_shape, self.image_shape
+		rng,  poolsize = self.rng, self.poolsize
+		
+		## convolve input feature maps with fitlers
+		conv_out = conv.conv2d(input = X, filters = self.W, 
+                            filter_shape = filter_shape, image_shape = image_shape)
+		## downsample each feature map individually using maxpooling
+		pooled_out = downsample.max_pool_2d(input = conv_out, 
+                            ds = poolsize, ignore_border = True)
+		## set the output and params
+		self.output = T.tanh(pooled_out + self.b.dimshuffle('x', 0, 'x', 'x'))
+		
+	def prediction(self, X):
+		conv_out = conv.conv2d(input = X, filters = self.W, 
+                            filter_shape = self.filter_shape, image_shape = self.image_shape)
+		## downsample each feature map individually using maxpooling
+		pooled_out = downsample.max_pool_2d(input = conv_out, 
+                            ds = self.poolsize, ignore_border = True)
+		return T.tanh(pooled_out + self.b.dimshuffle('x', 0, 'x', 'x'))
+
+class LeNetClassifierFormula(object):
+	"""
+	LeNet convolutional network
+	"""
+	def __init__(self, n_out, batch_size, image_size, filter_size = (5, 5), 
+				pool_size = (2, 2), n_kerns = (20, 50), rng = None):
+		"""
+		image_size = (image_height, image_width)
+		n_kerns = list of n_hidden_nodes in each hidden layer (kernels)
+		"""
+		self.n_out = n_out
+		self.image_size = image_size
+		self.filter_size = filter_size
+		self.pool_size = pool_size
+		self.n_kerns = n_kerns
+		self.batch_size = batch_size
+		rng = rng or np.random.RandomState(0)
+		self.rng = rng
+
+		self.layer0 = LeNetConvPoolLayerFormula(self.rng, 
+				image_shape = (batch_size, 1, image_size[0], image_size[1]),
+				filter_shape = (n_kerns[0], 1, filter_size[0], filter_size[1]),
+				poolsize = pool_size)
+
+		layer1_img_sz = [(image_size[i] - filter_size[i] + 1) / pool_size[i] for i in xrange(2)]
+		self.layer1 = LeNetConvPoolLayerFormula(self.rng, 
+				image_shape = (batch_size, n_kerns[0], layer1_img_sz[0], layer1_img_sz[1]),
+				filter_shape = (n_kerns[1], n_kerns[0], filter_size[0], filter_size[0]),
+				poolsize = pool_size)
+
+		layer2_img_sz = [(layer1_img_sz[i] - filter_size[i] + 1) / pool_size[i] for i in xrange(2)]
+		self.layer2 = HiddenLayerFormula(self.rng, n_in = n_kerns[1]*layer2_img_sz[0]*layer2_img_sz[0], 
+								n_out = 500, activation = T.tanh)
+
+		self.layer3 = LogisticRegressionFormula(n_in = 500, n_out = n_out)
+		self.params = self.layer3.params + self.layer2.params + self.layer1.params + self.layer0.params
+	def bind_input(self, X):
+		n_out = self.n_out
+		image_size = self.image_size
+		filter_size = self.filter_size
+		pool_size = self.pool_size
+		n_kerns = self.n_kerns
+		batch_size = self.batch_size
+		rng = self.rng
+
+		layer0_input = X.reshape((batch_size, 1, image_size[0], image_size[1]))
+		self.layer0.bind_input(layer0_input)
+		self.layer1.bind_input(self.layer0.output)
+		self.layer2.bind_input(self.layer1.output.flatten(2))
+		self.layer3.bind_input(self.layer2.output)
+		
+	def cost(self, y):
+		return self.layer3.negative_log_likelihood(y)
+	def error(self, y):
+		return self.layer3.error(y)
+	def prediction(self, X):
+		print >> sys.stderr, 'The prediction() in LeNetClassifierFormula does NOT look right'
+		n_batches = X.get_value(borrow = True).shape[0] / self.batch_size
+		batch_ys = []
+		batch_probas = []
+		for i in xrange(n_batches):
+			subX = X[i*self.batch_size:(i+1)*self.batch_size]
+			self.bind_input(subX)
+			"""
+			layer0_input = subX.reshape((self.batch_size, 1, self.image_size[0], self.image_size[1]))
+			layer1_input = self.layer0.prediction(layer0_input)
+			layer2_input = self.layer1.prediction(layer1_input).flatten(2)
+			layer3_input = self.layer2.prediction(layer2_input)
+			y, proba = self.layer3.prediction(layer3_input)
+			batch_ys.append(y)
+			batch_probas.append(proba)
+			"""
+			batch_ys.append(self.layer3.y_pred)
+			batch_probas.append(self.layer3.p_y_given_x)
+		return T.concatenate(batch_ys, axis = 0), T.concatenate(batch_probas, axis = 0)
+		"""
+		layer0_input = X.reshape((self.batch_size, 1, self.image_size[0], self.image_size[1]))
+		layer1_input = self.layer0.prediction(layer0_input)
+		layer2_input = self.layer1.prediction(layer1_input).flatten(2)
+		layer3_input = self.layer2.prediction(layer2_input)
+		return self.layer3.prediction(layer3_input)
+		"""
 
 class MLPClassifierFormula(object):
 	"""
@@ -119,7 +268,7 @@ class MLPClassifierFormula(object):
 		self.hiddenlayer = HiddenLayerFormula(rng = self.rng, n_in = n_in, n_out = n_hidden,
 											activation = T.tanh)
 		self.logregressionlayer = LogisticRegressionFormula(n_in = n_hidden, n_out = n_out)
-
+		self.params = self.hiddenlayer.params + self.logregressionlayer.params
 	## X related formulas 
 	def bind_input(self, X):
 		## bind X variable
@@ -129,7 +278,7 @@ class MLPClassifierFormula(object):
 		self.L1 = abs(self.hiddenlayer.W).sum() + abs(self.logregressionlayer.W).sum()
 		## L2 norm
 		self.L2_sqr = (self.hiddenlayer.W ** 2).sum() + (self.logregressionlayer.W ** 2).sum()
-		self.params = self.hiddenlayer.params + self.logregressionlayer.params 
+		 
 	## X and y related formulas 
 	def negative_log_likelihood(self, y):
 		return self.logregressionlayer.negative_log_likelihood(y)

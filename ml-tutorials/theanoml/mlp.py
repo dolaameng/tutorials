@@ -26,12 +26,14 @@ class MLPClassifier(object):
 			n_hidden = self.n_hidden, n_out = self.n_classes, 
 			L1_coeff = self.l1_penalty, L2_coeff = self.l2_penalty)
 		self._optimize(X, y)
+		return self
 	def partial_fit(self, X, y):
 		if self.mlp_ is None: # new fit
-			self.fit(X, y)
+			return self.fit(X, y)
 		else:
 			## no re-initialization of the classifier param
 			self._optimize(X, y)
+			return self
 	def predict(self, X):
 		y_pred, p_y_given_x = self.mlp_.prediction(X)
 		return y_pred.eval()
@@ -45,7 +47,10 @@ class MLPClassifier(object):
 		train_X, validation_X, train_y, validation_y = train_test_split(X, y, test_size = 0.2)
 		v_train_X, v_validation_X = share_data(train_X), share_data(validation_X)
 		v_train_y, v_validation_y = share_data(train_y, dtype='int32'), share_data(validation_y, dtype='int32')
-		sgd(v_train_X, v_train_y, v_validation_X, v_validation_y, self.mlp_)
+		sgd(v_train_X, v_train_y, v_validation_X, v_validation_y, self.mlp_, 
+			learning_rate = 0.01, n_epochs = 1000, batch_size = 20, 
+			verbose = True, patience = 10000, patience_increase = 2,
+			improvement_threshold = 0.995)
 	def _predict(self, X):
 		v_X = share_data(X)
 		return self.mlp_.prediction(v_X)

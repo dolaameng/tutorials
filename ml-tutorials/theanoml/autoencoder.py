@@ -2,6 +2,126 @@ from formula import share_data
 import numpy as np
 import theano
 import theano.tensor as T
+from theano.tensor.shared_randomstreams import RandomStreams
+
+################# Denoising Auto Encoder ########################
+
+class DenoisingAutoEncoderFormula(object):
+	"""
+	Contractive Auto Encoder.
+     References :
+   		- P. Vincent, H. Larochelle, Y. Bengio, P.A. Manzagol: Extracting and
+   		Composing Robust Features with Denoising Autoencoders, ICML'08, 1096-1103,
+   		2008
+   		- Y. Bengio, P. Lamblin, D. Popovici, H. Larochelle: Greedy Layer-Wise
+   		Training of Deep Networks, Advances in Neural Information Processing
+   		Systems 19, 2007
+	"""
+	def __init__(self,  n_visible, n_hidden,
+					corruption_level = 0.1,
+					X = None, W = None, bhid = None, bvis = None, 
+					rng = None):
+		"""
+		rng = np.random.RandomState
+		n_visible = n_input_feats
+		n_hidden = n_hidden_nodes
+		batch_size = n_sample of a batch
+		x
+		W, W.prime = hidden params, W.T
+		bhid, bvis = forward and backward bias through hidden layer  
+		"""
+		rng = rng or np.random.RandomState(0)
+		self.n_visible = n_visible
+		self.n_hidden = n_hidden
+		self.X = X or T.matrix(name = 'X')
+		self.corruption_level = corruption_level
+		if not W:
+			W_bound = 4. * np.sqrt(6. / (n_hidden + n_visible))
+			W = theano.shared(value = np.asarray(rng.uniform(
+										low = -W_bound,
+										high = W_bound,
+										size = (n_visible, n_hidden)),
+										dtype = theano.config.floatX),
+								name = 'W', 
+								borrow = True)
+		if not bvis:
+			bvis = theano.shared(value = np.zeros(n_visible, 
+                                    dtype = theano.config.floatX),
+                    borrow = True)
+		if not bhid:
+			bhid = theano.shared(value = np.zeros(n_hidden,
+                                    dtype = theano.config.floatX), 
+                    borrow = True)
+		self.W = W
+		self.W_prime = self.W.T
+		self.b = bhid
+		self.b_prime = bvis
+		self.theano_rng = RandomStreams(rng.randint(2 ** 30))
+		self.params = [self.W, self.b, self.b_prime]
+	def corrupted_input(self, X):
+		return self.theano_rng.binomial(size = X.shape, n = 1, 
+					p = 1 - self.corruption_level, 
+					dtype = theano.config.floatX) * X 
+	def bound_input(self, X):
+		self.X = X
+	def hidden_value(self, X):
+		return T.nnet.sigmoid(T.dot(X, self.W) + self.b)
+	def reconstructed_input(self, hidden):
+		return T.nnet.sigmoid(T.dot(hidden, self.W_prime) + self.b_prime)
+	def cost(self):
+		tilde_X = self.corrupted_input(self.X)
+		y = self.hidden_value(tilde_X)
+		z = self.reconstructed_input(y)
+		## we sum over the size of a datapoint; if we are using minibatches,
+		## L will be a vector, with one entry per example in minibatch
+		L = -T.sum(self.X * T.log(z) + (1-self.X)*T.log(1-z), axis = 1)
+		return T.mean(L)
+
+
+class DenoisingAutoEncoder(object):
+	def __init__(self, corruption_level = 0.1,  n_hidden = 500, batch_size = 10,
+					n_epochs = 20, learning_rate = 0.01, verbose = True):
+		self.corruption_level = corruption_level
+		self.batch_size = batch_size
+		self.n_hidden = n_hidden
+		self.n_epochs = n_epochs
+		self.learning_rate = learning_rate
+		self.verbose = verbose
+		self.da_ = None
+	def fit(self, X):
+		n_samples, n_feats = X.shape
+		n_train_batches = n_samples / self.batch_size
+		v_X = share_data(X)
+
+		self.da_ = DenoisingAutoEncoderFormula(n_visible = n_feats, 
+									n_hidden = self.n_hidden, 
+									corruption_level = self.corruption_level)
+		index = T.lscalar('index')
+		cost = self.da_.cost()
+		gparams = T.grad(cost, self.da_.params)
+		updates = [(param, param - self.learning_rate*gparam) 
+					for (param, gparam) in zip(self.da_.params, gparams)]
+		train_model = theano.function(inputs = [index], 
+							outputs = cost,
+							updates = updates,
+							givens = {
+								self.da_.X: v_X[index*self.batch_size:(index+1)*self.batch_size]
+						})
+		for epoch in xrange(self.n_epochs):
+			cost = [train_model(i) for i in xrange(n_train_batches)]
+			if self.verbose:
+				print 'training epoch %d, recall cost %f ' % (
+					epoch, np.mean(cost))
+		return self
+	def transform(self, X):
+		v_X = share_data(X)
+		return self.da_.hidden_value(v_X).eval()
+		##return self.da_.hidden_value(self.da_.corrupted_input(v_X)).eval()
+	def fit_transform(self, X):
+		return self.fit(X).transform(X)
+
+
+################## Contractive Auto Encoder #####################
 
 class ContractiveAutoEncoderFormula(object):
 	"""
@@ -116,6 +236,7 @@ class ContractiveAutoEncoder(object):
 				)
 		return self
 	def transform(self, X):
-		return self.ca_.hidden_value(X).eval()
+		v_X = share_data(X)
+		return self.ca_.hidden_value(v_X).eval()
 	def fit_transform(self, X):
 		return self.fit(X).transform(X)

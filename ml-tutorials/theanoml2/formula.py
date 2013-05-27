@@ -15,15 +15,21 @@
 ## formula classes play the roles of inputs and outputs in those functions 
 
 import theano
-import theano.tensor as T
-import numpy as np 
+import theano.tensor as T 
 from theano.tensor.shared_randomstreams import RandomStreams
+from theano.tensor.signal import downsample
+from theano.tensor.nnet import conv
+
 from sklearn.base import BaseEstimator
 from sklearn.cross_validation import train_test_split
+from sklearn import metrics
+
 from functools import partial
 import abc
+import numpy as np
+
 from optimize import batch_sgd_optimize
-from sklearn import metrics
+
 
 
 class SupervisedModel(BaseEstimator):
@@ -248,6 +254,91 @@ class FMLPClassifier(object):
 		## model cost and error
 		self.cost = self.logregression_layer.cost
 		self.error = self.logregression_layer.error
+
+
+class FLeNetConvPoolLayer(object):
+	"""
+	Pool layer of a convolutional network
+	"""
+	def __init__(self, image_shape, filter_shape, pool_size = (2, 2), 
+					X = None, y = None):
+		"""
+		filter_shape = (n_filters, n_input_feats_maps, filter_ht, filter_wd)
+		image_shape = (batch_size, n_input_feats_maps, img_ht, img_wd)
+		pool_size = the downsampling (pooling) factor (n_rows, n_cols)
+		"""
+		assert image_shape[1] == filter_shape[1]
+		rng = np.random.RandomState(0)
+		## model inputs - integer y for classification
+		self.X = X or T.matrix('X')
+		## model params 
+		## n_inputs_feats_maps * filter_ht * filter_wd inputs to each hidden unit
+		fan_in = np.prod(filter_shape[1:])
+		## each unit receives n_output_feats_maps * filter_ht * filter_wd / pool_size gradient
+		fan_out = (filter_shape[0] * np.prod(filter_shape[2:]) 
+						/ np.prod(pool_size))
+		W_bound = np.sqrt(6. / (fan_in + fan_out))
+		self.W = theano.shared(np.asarray(rng.uniform(
+                                        low = -W_bound,
+                                        high = W_bound,
+                                        size = filter_shape), 
+                                    dtype=theano.config.floatX),
+                                name = 'LeNet_W',
+                                borrow = True)
+		b_values = np.zeros((filter_shape[0], ), 
+						dtype = theano.config.floatX)
+		self.b = theano.shared(value = b_values, borrow = True, name = 'LeNet_b')
+		self.params = (self.W, self.b)
+		## model prediction
+		conv_out = conv.conv2d(input = X, filters = self.W, 
+                            filter_shape = filter_shape, image_shape = image_shape)
+		pooled_out = downsample.max_pool_2d(input = conv_out, 
+                            ds = pool_size, ignore_border = True)
+		self.prediction = T.tanh(pooled_out + self.b.dimshuffle('x', 0, 'x', 'x'))
+		## model cost and error
+		## N.A.
+
+class FLeNetClassifier(object):
+	"""
+	LeNet convolutional network
+	"""
+	def __init__(self, n_out, batch_size, image_size, 
+		n_hidden = 500, filter_size = (5, 5), pool_size = (2, 2), n_kerns = (20, 50),
+		X = None, y = None):
+		"""
+		n_kerns = list of n_hidden_nodes in each hidden layer (kernels)
+		"""
+		rng = np.random.RandomState(0)
+		## model inputs - integer y for classification
+		self.X = X or T.matrix('X')
+		self.y = y or T.ivector('y')
+		self.batch_size = batch_size
+		## model params
+		self.layer0_input = self.X.reshape((self.batch_size, 1, image_size[0], image_size[1]))
+		self.layer0 = FLeNetConvPoolLayer(
+				image_shape = (self.batch_size, 1, image_size[0], image_size[1]),
+				filter_shape = (n_kerns[0], 1, filter_size[0], filter_size[1]),
+				pool_size = pool_size, X = self.layer0_input)
+		layer1_img_sz = [(image_size[i] - filter_size[i] + 1) / pool_size[i] 
+							for i in xrange(2)]
+		self.layer1 = FLeNetConvPoolLayer(
+				image_shape = (self.batch_size, n_kerns[0], layer1_img_sz[0], layer1_img_sz[1]),
+				filter_shape = (n_kerns[1], n_kerns[0], filter_size[0], filter_size[0]),
+				pool_size = pool_size, X = self.layer0.prediction)
+		layer2_img_sz = [(layer1_img_sz[i] - filter_size[i] + 1) / pool_size[i] 
+							for i in xrange(2)]
+		self.layer2 = FHiddenLayer(n_in = n_kerns[1]*layer2_img_sz[0]*layer2_img_sz[0], 
+				n_out = n_hidden, X = self.layer1.prediction.flatten(2), 
+				activation = T.tanh)
+		self.layer3 = FLogisticRegression(n_in = n_hidden, n_out = n_out, 
+				X = self.layer2.prediction, y = self.y)
+		self.params = (self.layer3.params + self.layer2.params 
+						+ self.layer1.params + self.layer0.params)
+		## model prediction
+		self.prediction = self.layer3.prediction
+		## model cost and error
+		self.cost = self.layer3.cost
+		self.error = self.layer3.error
 
 
 

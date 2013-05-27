@@ -24,3 +24,4 @@ import formula
 import optimize
 import linear_model
 import mlp
+import lenet

@@ -26,22 +26,8 @@ class LeNetClassifier(SupervisedModel):
 			n_kerns = self.n_kerns)
 		return formula
 	def predict(self, X):
-		"""
-		challenge is: the predicion depends on the batch size
-		"""
-		raise RuntimeError('Not Implemented')
-		batch_size = self.batch_size
-		n_batches = X.shape[0] / batch_size
-		v_Xs = [share_data(X[i*batch_size:(i+1)*batch_size]) for i in xrange(n_batches)]
-		yhats = []
-		for v_X in v_Xs:
-			predict_model = build_predict_model(self.formula_, {self.formula_.X: v_X})
-			yhat, yproba = predict_model()
-			yhats.append(yhat)
-		return np.vstack(yhats)
+		assert X.shape[0] == self.batch_size, "Current implementation of Lenet only supports batch_size prediction"
+		return super(LeNetClassifier, self).predict(X)
 	def predict_proba(self, X):
-		raise RuntimeError('Not Implemented')
-		v_X = share_data(X)
-		predict_model = build_predict_model(self.formula_, {self.formula_.X: v_X})
-		_, yproba = predict_model()
-		return yproba
+		assert X.shape[0] == self.batch_size, "Current implementation of Lenet only supports batch_size prediction"
+		return super(LeNetClassifier, self).predict_proba(X)

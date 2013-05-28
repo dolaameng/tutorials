@@ -33,3 +33,11 @@ class ContractiveAutoEncoder(UnsupervisedModel):
 						batch_size = self.batch_size, 
 						contraction_level = self.contraction_level)
 		return formula
+
+class SdAClassifier(object):
+	"""
+	stacked denoising auto encoder classifier
+	It is a mix of supervised and unsupervised model
+	"""
+	def __init__(self, ??):
+		pass

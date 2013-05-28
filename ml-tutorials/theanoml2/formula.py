@@ -495,3 +495,47 @@ class FCAE(object):
 	def reconstructed_input(self, hidden):
 		return T.nnet.sigmoid(T.dot(hidden, self.W_prime) + self.b_prime)
 
+class FSDAClassifier(object):
+	"""
+	Stacked denoising auto-encoder formla 
+	A stacked denoising autoencoder model is obtained by stacking several dAs. 
+	After pretraining, the SdA is dealt with as a normal MLP. the dAs are only used 
+	to initialize the weights.
+	SdA is an MLP, for which all weights of intermediate layers are shared with 
+	a different denoising autoencoders.
+	"""
+	def __init__(self, n_in, n_out, 
+				hidden_layer_sizes = (500, 500), corruption_levels = (0.1, 0.1), 
+				X = None, y = None):
+		rng = np.random.RandomState(0)
+		theano_rng = RandomStreams(rng.randint(2 ** 30))
+		## model inputs 
+		self.X = X or T.matrix('X')
+		self.y = y or T.ivector('y')
+		## model params 
+		self.sigmoid_layers = []
+		self.dA_layers = []
+		self.params = []
+		self.n_layers = len(hidden_layer_sizes)
+		for i in xrange(self.n_layers):
+			## construct sigmoid layers
+			input_size = n_in if i == 0 else hidden_layer_sizes[i-1]
+			layer_input = self.X if i == 0 else self.sigmoid_layers[-1].prediction
+			sigmoid_layer = FHiddenLayer(n_in = input_size, n_out = hidden_layer_sizes[i], 
+				activation = T.nnet.sigmoid, X = layer_input)
+			self.sigmoid_layers.append(sigmoid_layer)
+			self.params.extend(sigmoid_layer.params)
+			## construct a denoising autoencoder that share weights with these layers
+			dA_layer = FDAE(n_visible = input_size, n_hidden = hidden_layer_sizes[i], 
+				corruption_level = corruption_levels[i], 
+				X = layer_input, W = sigmoid_layer.W, bvis = None, bhid = sigmoid_layer.b)
+			self.dA_layers.append(dA_layer)
+		# put a logistic layer on top of MLP
+		self.logLayer = FLogisticRegression(n_in = hidden_layer_sizes[-1], n_out = n_out, 
+				X = self.sigmoid_layers[-1].prediction, y=self.y)
+		self.params.extend(self.logLayer.params)
+		## model prediction 
+		self.prediction = self.logLayer.prediction
+		## model cost and error 
+		self.cost = self.logLayer.cost
+		self.error = self.logLayer.error

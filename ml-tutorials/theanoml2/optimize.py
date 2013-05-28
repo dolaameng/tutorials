@@ -47,10 +47,31 @@ def batch_sgd_optimize(model_infor, n_epochs, verbose = True, patience = 1000,
 					if this_validation_error < best_validation_error * improvement_threshold:
 						patience = max(patience, iter * patience)
 					best_validation_error = this_validation_error
-					best_params = params 
+					best_params = [p.get_value() for p in params] ## should be OK to update this way
 			if patience <= iter:
 				out_of_patience = True 
 				break 
 	if verbose:
 		print 'optimization complete with best validation error: %f %%' % (best_validation_error * 100.)
 	return best_params 
+
+def batch_fixed_iter_optimize(model_infor, n_epochs, verbose = True):
+	## get information needed for optimization
+	params = model_infor['params'] # reference to params used in train_model
+	train_model = model_infor['train_model']
+	n_train_batches = model_infor['n_train_batches']
+	batch_size = model_infor['batch_size']
+	## optimization params
+	best_params = None 
+	best_train_cost = np.inf
+	## iterative optimization for a fixed number of iterations 
+	for epoch in xrange(n_epochs):
+		train_cost = np.mean([train_model(i) for i in xrange(n_train_batches)])
+		if verbose:
+			print 'training epoch %i, train cost %f' % (epoch, train_cost)
+		if train_cost < best_train_cost:
+			best_train_cost = train_cost
+			best_params = [p.get_value() for p in params]
+	if verbose:
+		print 'optimization complete with best train cost: %f' % best_train_cost
+	return best_params

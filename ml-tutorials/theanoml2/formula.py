@@ -28,7 +28,7 @@ from functools import partial
 import abc
 import numpy as np
 
-from optimize import batch_sgd_optimize
+from optimize import *
 
 
 
@@ -86,9 +86,42 @@ class SupervisedModel(BaseEstimator):
 		
 		model_infor = build_batch_sgd_model_infor(self.formula_, 
         	v_train_X, v_train_y, v_validation_X, v_validation_y, 
-        	batch_size = self.batch_size)
+        	batch_size = self.batch_size, learning_rate = self.learning_rate)
 		best_params = batch_sgd_optimize(model_infor, n_epochs = self.n_epochs)
-		self.formula_.params = best_params	
+		for i in xrange(len(best_params)):
+			self.formula_.params[i].set_value(best_params[i])	
+		return self
+
+class UnsupervisedModel(BaseEstimator):
+	__metaclass__ = abc.ABCMeta
+	def __init__(self):
+		## in the derived class, accept params to create formula
+		## make formula_ = None
+		pass
+	def fit(self, X):
+		self.formula_ = self._create_formula(X)
+		return self._optimize(X)
+	def partial_fit(self, X):
+		if self.formula_ is None:
+			return self.fit(X)
+		else:
+			return self._optimize(X)
+	def transform(self, X):
+		v_X = share_data(X)
+		predict_model = build_predict_model(self.formula_, {self.formula_.X: v_X})
+		return predict_model()
+	def fit_transform(self, X):
+		return self.fit(X).transform(X)
+	@abc.abstractmethod
+	def _create_formula(self, X):
+		pass
+	def _optimize(self, X):
+		v_X = share_data(X)
+		model_infor = build_batch_fixed_iter_model_infor(self.formula_, v_X, 
+			batch_size = self.batch_size, learning_rate = self.learning_rate)
+		best_params = batch_fixed_iter_optimize(model_infor, n_epochs = self.n_epochs)
+		for i in xrange(len(best_params)):
+			self.formula_.params[i].set_value(best_params[i])
 		return self
 
 def build_batch_sgd_model_infor(model, v_train_X, v_train_y,
@@ -115,6 +148,21 @@ def build_batch_sgd_model_infor(model, v_train_X, v_train_y,
 		'batch_size': batch_size
 	}
 	return model_infor
+
+def build_batch_fixed_iter_model_infor(model, v_train_X, batch_size, 
+				learning_rate = 0.01):
+	n_train_samples = v_train_X.get_value(borrow = True).shape[0]
+	n_train_batches = n_train_samples / batch_size
+	train_model = build_train_model(model, {
+			model.X: v_train_X}, 
+		batch_size, learning_rate)
+	model_infor = {
+		'params': model.params,
+		'train_model': train_model,
+		'n_train_batches': n_train_batches,
+		'batch_size': batch_size
+	}
+	return model_infor 
 
 def build_train_model(formula, data_bindings, batch_size, learning_rate = 0.01):
 	"""
@@ -170,12 +218,12 @@ class FLogisticRegression(object):
 	self.error = classification error
 	self.prediction = y_pred and p_y_given_x
 	"""
-	def __init__(self, n_in, n_out, X=None, y=None):
+	def __init__(self, n_in, n_out, X=None, y=None, W = None, b = None):
 		## model params
-		self.W = theano.shared(value = np.zeros((n_in, n_out), 
+		self.W = W or theano.shared(value = np.zeros((n_in, n_out), 
 								dtype = theano.config.floatX),
 					name = 'LR_W', borrow = True)
-		self.b = theano.shared(value = np.zeros((n_out, ), 
+		self.b = b or theano.shared(value = np.zeros((n_out, ), 
 								dtype = theano.config.floatX),
 					name = 'LR_b', borrow = True)
 		self.params = (self.W, self.b)
@@ -191,12 +239,12 @@ class FLogisticRegression(object):
 		self.error = T.mean(T.neq(self.y_pred, self.y))
 
 class FLinearRegression(object):
-	def __init__(self, n_in, X = None, y = None):
+	def __init__(self, n_in, X = None, y = None, W = None, b = None):
 		## model params 
-		self.W = theano.shared(value = np.zeros((n_in, ), 
+		self.W = W or theano.shared(value = np.zeros((n_in, ), 
 								dtype = theano.config.floatX),
 					name = 'LR_W', borrow = True)
-		self.b = theano.shared(value = np.zeros((), 
+		self.b = b or theano.shared(value = np.zeros((), 
 								dtype = theano.config.floatX),
 					name = 'LR_b', borrow = True)
 		self.params = (self.W, self.b)
@@ -213,7 +261,7 @@ class FLinearRegression(object):
 class FHiddenLayer(object):
 	"""Hidden Layer of MLP"""
 	def __init__(self, n_in, n_out, activation = T.tanh, 
-					X = None):
+					X = None, W = None, b = None):
 		## model params 
 		rng = np.random.RandomState(0)
 		W_value = np.asarray(rng.uniform(
@@ -223,9 +271,9 @@ class FHiddenLayer(object):
 						dtype = theano.config.floatX)
 		if activation == T.nnet.sigmoid:
 			W_value *= 4
-		self.W = theano.shared(value = W_value, name = 'hidden_layer_W', borrow = True)
+		self.W = W or theano.shared(value = W_value, name = 'hidden_layer_W', borrow = True)
 		b_value = np.zeros((n_out, ), dtype = theano.config.floatX)
-		self.b = theano.shared(value = b_value, name = 'hidden_layer_b', borrow = True)
+		self.b = b or theano.shared(value = b_value, name = 'hidden_layer_b', borrow = True)
 		self.params = (self.W, self.b)
 		## model inputs - integer y for classification
 		self.X = X or T.matrix('X')
@@ -261,7 +309,7 @@ class FLeNetConvPoolLayer(object):
 	Pool layer of a convolutional network
 	"""
 	def __init__(self, image_shape, filter_shape, pool_size = (2, 2), 
-					X = None, y = None):
+					X = None, y = None, W = None, b = None):
 		"""
 		filter_shape = (n_filters, n_input_feats_maps, filter_ht, filter_wd)
 		image_shape = (batch_size, n_input_feats_maps, img_ht, img_wd)
@@ -278,7 +326,7 @@ class FLeNetConvPoolLayer(object):
 		fan_out = (filter_shape[0] * np.prod(filter_shape[2:]) 
 						/ np.prod(pool_size))
 		W_bound = np.sqrt(6. / (fan_in + fan_out))
-		self.W = theano.shared(np.asarray(rng.uniform(
+		self.W = W or theano.shared(np.asarray(rng.uniform(
                                         low = -W_bound,
                                         high = W_bound,
                                         size = filter_shape), 
@@ -287,7 +335,7 @@ class FLeNetConvPoolLayer(object):
                                 borrow = True)
 		b_values = np.zeros((filter_shape[0], ), 
 						dtype = theano.config.floatX)
-		self.b = theano.shared(value = b_values, borrow = True, name = 'LeNet_b')
+		self.b = b or theano.shared(value = b_values, borrow = True, name = 'LeNet_b')
 		self.params = (self.W, self.b)
 		## model prediction
 		conv_out = conv.conv2d(input = X, filters = self.W, 
@@ -339,8 +387,111 @@ class FLeNetClassifier(object):
 		## model cost and error
 		self.cost = self.layer3.cost
 		self.error = self.layer3.error
+class FDAE(object):
+	"""
+	Formula for Denoising Auto Encoder
+	"""
+	def __init__(self, n_visible, n_hidden, corruption_level, 
+					X = None, W = None, bvis = None, bhid = None):
+		rng = np.random.RandomState(0)
+		self.theano_rng = RandomStreams(rng.randint(2 ** 30))
+		self.corruption_level = corruption_level
+		## model inputs
+		self.X = X or T.matrix(name = 'X')
+		## model params
+		if not W:
+			W_bound = 4. * np.sqrt(6. / (n_hidden + n_visible))
+			W = theano.shared(value = np.asarray(rng.uniform(
+										low = -W_bound,
+										high = W_bound,
+										size = (n_visible, n_hidden)),
+										dtype = theano.config.floatX),
+								name = 'DAE_W', 
+								borrow = True)
+		if not bvis:
+			bvis = theano.shared(value = np.zeros(n_visible, 
+                                    dtype = theano.config.floatX),
+                    name = 'DAE_bvis',
+                    borrow = True)
+		if not bhid:
+			bhid = theano.shared(value = np.zeros(n_hidden,
+                                    dtype = theano.config.floatX), 
+                    name = 'DAE_bhid',
+                    borrow = True)
+		self.W = W
+		self.W_prime = self.W.T
+		self.b = bhid
+		self.b_prime = bvis
+		self.params = (self.W, self.b, self.b_prime)
+		## model prediction - no corruption version
+		self.prediction = self.hidden_value(self.X)
+		## model cost and error
+		tilde_X = self.corrupted_input(self.X)
+		y = self.hidden_value(tilde_X)
+		z = self.reconstructed_input(y)
+		L = -T.sum(self.X * T.log(z) + (1-self.X)*T.log(1-z), axis = 1)
+		self.cost = T.mean(L)
+		## self.error = Not relevant
+	def corrupted_input(self, X):
+		return self.theano_rng.binomial(size = X.shape, n = 1, 
+					p = 1 - self.corruption_level, 
+					dtype = theano.config.floatX) * X
+	def hidden_value(self, X):
+		return T.nnet.sigmoid(T.dot(X, self.W) + self.b)
+	def reconstructed_input(self, hidden):
+		return T.nnet.sigmoid(T.dot(hidden, self.W_prime) + self.b_prime)
 
 
-
-
+class FCAE(object):
+	"""
+	Formula for Contractive Auto Encoder
+	"""
+	def __init__(self, n_visible, n_hidden, batch_size, contraction_level,
+					X = None, W = None, bhid = None, bvis = None):
+		rng = np.random.RandomState(0)
+		self.batch_size = batch_size
+		self.contraction_level = contraction_level
+		self.n_visible = n_visible
+		self.n_hidden = n_hidden
+		## model inputs
+		self.X = X or T.matrix('X')
+		## model params
+		if not W:
+			W_bound = 4. * np.sqrt(6. / (n_hidden + n_visible))
+			W = theano.shared(value = np.asarray(rng.uniform(
+										low = -W_bound,
+										high = W_bound,
+										size = (n_visible, n_hidden)),
+										dtype = theano.config.floatX),
+								name = 'W', 
+								borrow = True)
+		if not bvis:
+			bvis = theano.shared(value = np.zeros(n_visible, 
+                                    dtype = theano.config.floatX),
+                    borrow = True)
+		if not bhid:
+			bhid = theano.shared(value = np.zeros(n_hidden,
+                                    dtype = theano.config.floatX), 
+                    borrow = True)
+		self.W = W
+		self.W_prime = self.W.T
+		self.b = bhid 
+		self.b_prime = bvis 
+		self.params = (self.W, self.b, self.b_prime)
+		## model prediction
+		self.prediction = self.hidden_value(self.X)
+		## model cost and error
+		z = self.reconstructed_input(self.prediction)
+		J = self.jacobian(self.prediction, self.W)
+		L_rec = - T.sum(self.X*T.log(z) + (1-self.X)*T.log(1-z), axis = 1)
+		L_jacob = T.sum(J ** 2) / self.batch_size
+		self.cost = T.mean(L_rec) + self.contraction_level * T.mean(L_jacob)
+	def hidden_value(self, X):
+		return T.nnet.sigmoid(T.dot(X, self.W) + self.b)
+	def jacobian(self, hidden, W):
+		reshaped_hidden = T.reshape(hidden * (1-hidden), (self.batch_size, 1, self.n_hidden))
+		reshaped_W = T.reshape(W, (1, self.n_visible, self.n_hidden))
+		return reshaped_hidden * reshaped_W
+	def reconstructed_input(self, hidden):
+		return T.nnet.sigmoid(T.dot(hidden, self.W_prime) + self.b_prime)
 

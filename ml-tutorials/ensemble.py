@@ -160,9 +160,9 @@ class GreedyEnsemble(BaseEstimator):
 			else:
 				if verbose:
 					print 'checking model', next_model, 'improvement from ', ensemble_score, 'to', next_score
-				ensemble_score = next_score
-				ensemble.append(next_model)
-				candidates.remove(next_model)
+			ensemble_score = next_score
+			ensemble.append(next_model)
+			candidates.remove(next_model)
 		return ensemble
 
 

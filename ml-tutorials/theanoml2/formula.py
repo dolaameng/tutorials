@@ -150,11 +150,12 @@ def build_batch_sgd_model_infor(model, v_train_X, v_train_y,
 	return model_infor
 
 def build_batch_fixed_iter_model_infor(model, v_train_X, batch_size, 
-				learning_rate = 0.01):
+				learning_rate = 0.01, model_X = None):
+	model_X = model_X or model.X
 	n_train_samples = v_train_X.get_value(borrow = True).shape[0]
 	n_train_batches = n_train_samples / batch_size
 	train_model = build_train_model(model, {
-			model.X: v_train_X}, 
+			model_X: v_train_X}, 
 		batch_size, learning_rate)
 	model_infor = {
 		'params': model.params,

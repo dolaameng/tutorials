@@ -1,7 +1,7 @@
 from sklearn import tree
 import cPickle, sys
 from sklearn.externals import joblib
-import os, shutil
+import os, shutil, time
 
 if __name__ == "__main__":
 	fdata, fmodel = sys.argv[1:]
@@ -14,3 +14,5 @@ if __name__ == "__main__":
 		shutil.rmtree(fmodel)
 	os.mkdir(fmodel)
 	joblib.dump(mdl, os.path.join(fmodel, 'model.pkl'))
+
+	time.sleep(5)

@@ -1,4 +1,4 @@
-import sys, os
+import sys, os, time
 from sklearn.externals import joblib
 
 if __name__ == '__main__':
@@ -7,3 +7,5 @@ if __name__ == '__main__':
 	feature_importances = mdl.feature_importances_
 	with open(fresult, 'w') as f:
 		f.write(repr(feature_importances))
+
+	time.sleep(5)

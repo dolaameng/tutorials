@@ -14,10 +14,12 @@ def parallel_dag(view, dag, jobs):
 		deps = [results[n] for n in dag.predecessors(node)]
 		with view.temp_flags(after=deps, block = False):
 			results[node] = view.apply_async(jobs[node]['f'], jobs[node]['params'])
-	view.wait()
+	view.wait(results.values())
+	"""
 	for i, r in enumerate(results.values()):
 		r.wait_interactive()
 		print r.get()
+	"""
 
 def subprocess_call(args):
 	import subprocess, os

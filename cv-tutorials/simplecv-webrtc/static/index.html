@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<script type="text/javascript" src="static/jquery-1.7.2.js">
+    </script>
+    <script type="text/javascript" src="socket.io.js"></script>
+    <script>    
+			// socket.io specific code
+			var socket = io.connect();
+			socket.on('update', function(data) {
+								console.log('got data');
+								console.log(data);
+								//canvas = document.createElement('canvas');
+								canvas = document.getElementById('output');
+								canvas.width = 640;
+								canvas.height = 480;
+								context = canvas.getContext('2d');
+								document.getElementById('text-out').appendChild(canvas);
+								img = new Image();
+								img.src = data;
+								img.onload = function() {
+									context.drawImage(img, 0, 0);
+								}
+								
+								});
+   </script>
+
+		<meta charset="utf-8" />
+
+		<title>Haar Features on Your Face</title>
+	</head>
+
+	<body>
+
+		<p id="status" style="color:red">
+			<noscript>JavaScript is disabled.</noscript>
+		</p>
+
+		<script src="webcam.js"></script>
+		<script>
+		button = document.getElementsByTagName('button')[0]
+		$(button).click( function()
+           {
+							socket.emit('image', document.getElementsByTagName('canvas')[0].toDataURL());
+           }
+      );
+   </script>
+	<div id="text-out">
+		<canvas id="legend" width="640" height="480"></canvas>
+	</div>
+	
+	<canvas id="output"></canvas>
+	
+	<script type="text/javascript">
+	var legend = document.getElementById('legend');
+	var context = legend.getContext('2d');
+	var drawings = {
+		  "eyes": "green"
+		, "mouth": "red"
+		, "nose": "blue"
+		, "ears": "gold"
+	};
+	var r = 30;
+	var x = 500,
+		y = 70;
+	for(var part in drawings) {
+		color = drawings[part];
+		context.beginPath();
+		context.arc(x, y, r, 0, Math.PI * 2);
+		context.closePath();
+		context.fillStyle = color;
+		context.fill();
+		context.fillStyle = "white";
+		context.fillText(part, x - r/4, y - r/4);
+		y += 2*r;
+	}
+	</script>
+	</body>
+</html>

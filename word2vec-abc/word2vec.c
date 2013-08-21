@@ -378,14 +378,87 @@ void CreateBinaryTree() {
 	//Create binary Huffman tree using the word counts
 	// Frequent words will have short unique binary codes
 	long long a, b, i;
-	long long min1i, min2i;
-	long long pos1, pos2; 
+	long long min1i, min2i; // two smallest nodes
+	long long pos1, pos2; // current pivots
 	long long point[MAX_CODE_LENGTH];
 	char code[MAX_CODE_LENGTH];
+	// calloc initializes the memory to zeros
 	long long *count = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
 	long long *binary = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
 	long long *parent_node = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
-	??
+	// count - word counts of all words
+	for (a = 0; a < vocab_size; a++) count[a] = vocab[a].cn;
+	// extend count as twice large
+	for (a = vocab_size; a < vocab_size * 2; a++) count[a] = 1e15;
+	// initialize the node positions
+	pos1 = vocab_size - 1; 
+	pos2 = vocab_size;
+	// following algorithm constructs the Huffman tree by
+	// adding one node at a time
+	// the vocab should have been sorted IN DECREASING order
+	// Initially pos1 will always move left because large val at pos2 blocks it
+	// Then it will update level 2 parents and higher levels (by moving to right)
+	// only need to check vocab_size - 2 times - build the parents
+	for (a = 0; a < vocab_size - 1; a++) {
+		// First, find two smallest nodes "min1, min2"
+		// MIN1 goes first
+		if (pos1 >= 0) {
+			if (count[pos1] < count[pos2]) { // move left via pos1
+				min1i = pos1;
+				pos1--;
+			} else { // move right via pos2
+				min1i = pos2;
+				pos2++;
+			}
+		} else { // no choice, can move right ONLy now
+			min1i = pos2;
+			pos2++;
+		}
+		// MIN2 goes next
+		if (pos1 >= 0) {
+			if (count[pos1] < count[pos2]) { // move left via pos1
+				min2i = pos1;
+				pos1--;
+			} else { // move right via pos2
+				min2i = pos2;
+				pos2++;
+			}
+		} else {
+			min2i = pos2;
+			pos2++;
+		}
+		// parent's count is the sum of children's counts
+		count[vocab_size + a] = count[min1i] + count[min2i];
+		// commmon parents
+		// level 2 parents will be from vocab_size to vocab_size * 2
+		parent_node[min1i] = vocab_size + a;
+		parent_node[min2i] = vocab_size + a;
+		// binary code: min1i 0 min2i 1
+		binary[min2i] = 1;
+	}
+	// now assign binary code to each vocabulary word
+	// update each vocab word and its parent
+	for (a = 0; a < vocab_size; a++) {
+		b = a;
+		i = 0;
+		while (1) {
+			code[i] = binary[b];
+			point[i] = b;
+
+			i++;
+			b = parent_node[b];
+			if (b == vocab_size * 2 - 2) break;
+		}
+		vocab[a].codelen = i;
+		vocab[a].point[0] = vocab_size - 2;
+		for (b = 0; b < i; b++) {
+			vocab[a].code[i - b - 1] = code[b];
+			vocab[a].point[i - b] = point[b] - vocab_size;
+		}
+	}
+	free(count);
+	free(binary);
+	free(parent_code);
 }
 
 // IT SEEMS that hs and negative can be used TOGETHER

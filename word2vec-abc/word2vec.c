@@ -365,11 +365,61 @@ void LearnVocabFromTrainFile() {
 }
 
 void SaveVocab() {
-	//TODO
+	long long i;
+	FILE * fo = fopen(save_vocab_file, "wb");
+	// "</s> 1\n" will be the first line of the written voc file
+	for (i = 0; i < vocab_size; i++) {
+		fprintf(fo, "%s %lld\n", vocab[i].word, vocab[i].cn);
+	}
+	fclose(fo);
 }
 
+void CreateBinaryTree() {
+	//Create binary Huffman tree using the word counts
+	// Frequent words will have short unique binary codes
+	long long a, b, i;
+	long long min1i, min2i;
+	long long pos1, pos2; 
+	long long point[MAX_CODE_LENGTH];
+	char code[MAX_CODE_LENGTH];
+	long long *count = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
+	long long *binary = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
+	long long *parent_node = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
+	??
+}
+
+// IT SEEMS that hs and negative can be used TOGETHER
 void InitNet() {
-	//TODO
+	// intialize the neural network structure
+	long long a, b;
+	// SOME CONVENTIONS : layer1_size will the the dimension of feature space
+	// syn0 and syn1/syn1neg are of size vocab_size * layer1_size
+	// allocate the memory to syn0, a stores return code
+	// syn0 is actually of (real *)
+	a = posix_memlign((void **)&syn0, 128, (long long)vocab_size * layer1_size * sizeof(real));
+	if (syn0 == NULL) {
+		printf("Memory allocation failed\n"); exit(1);
+	}
+	// Hierarchical Softmax 
+	if (hs) {
+		// allocate memory to syn1, a stores return code
+		a = posix_memlign((void **)&syn1, 128, (long long)vocab_size * layer1_size * sizeof(real));
+		if (syn1 == NULL) {printf("Memory allocation failed\n"); exit(1);}
+		for (b = 0; b < layer1_size; b++) for (a = 0; a < vocab_size; a++)
+			syn1[a * layer1_size + b] = 0;
+	}
+	// Negative Sampling
+	if (negative > 0) {
+		a = posix_memlign((void **)&syn1neg, 128, (long long)vocab_size * layer1_size * sizeof(real));
+		if (syn1neg == NULL) {printf("Memory allocaiton failed\n"); exit(1);}
+		for (b = 0; b < layer1_size; b++) for (a = 0; a < vocab_size; a++)
+			syn1neg[a * layer1_size + b] = 0;
+	}
+	// Initialization of syn0 layer to [-0.5, 0.5] / layer1_size
+	// 0 mean, 0.0015 std, though it is a uniform distribution
+	for (b = 0; b < layer1_size; b++) for (a = 0; a < vocab_size; a++)
+		syn0[a * layer1_size + b] = (rand() / (real)RAND_MAX - 0.5) / layer1_size;
+	CreateBinaryTree();
 }
 
 void *TrainModelThread(void *id) {

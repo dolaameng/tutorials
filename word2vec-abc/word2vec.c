@@ -26,6 +26,17 @@
 // the dimensionality of the feature space is layer1_size
 // So the dth feature for the cth word in vocab is syn0[c * layer1_size + d]
 
+// main datastructure 
+// * struct vocab_word - structure for word in vocabulary
+// * vocab - the collection of all vocab_words (size: vocab_max_size, vocab_size)
+// * vocab_hash - the collection of integers (hash of words), (size: vocab_hash_size)
+// *** the values in vocab_hash are the index of words in vocabulary
+// * table - the coolection of integers (??)
+// * model data structure
+// * syn0 - collection of real values (features of words as flattend) 
+// * syn1, syn1neg, 
+// * expTable - exponetial table for speed-up of sigmoid calculation
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,9 +56,9 @@ const int vocab_hash_size = 30000000;
 typedef float real;
 
 struct vocab_word {
-	long long cn; // count
-	int * point; // ??
-	char *word, *code, codelen; // ?? 
+	long long cn; // word count, read from vocab file or counted from train
+	int * point; // binary tree edges
+	char *word, *code, codelen; // word: the string, code: binary tree code
 };
 
 char train_file[MAX_STRING], output_file[MAX_STRING];
@@ -56,7 +67,9 @@ char save_vocab_file[MAX_STRING], read_vocab_file[MAX_STRING];
 // vocab table
 struct vocab_word *vocab;
 // flags: cbow = cbow architecture
-int binary = 0, cbow = 0, debug_mode = 2, window = 5, min_count = 5, num_threads = 1, min_reduce = 1;
+int binary = 0, cbow = 0, debug_mode = 2;
+int window = 5, min_count = 5; /*min counts for word from vocab to stay in vocab*/ 
+int num_threads = 1, min_reduce = 1; /*min counts for word from train to stay in vocab*/
 
 int * vocab_hash;
 
@@ -103,12 +116,252 @@ void InitUnigramTable() {
 	}
 }
 
+void ReadWord(char * word, FILE * fin) {
+	// Reads a single word from a file
+	// assuming SPACE + TAB + EOL to be word boundaries
+	// </s> will be the first word in each voc file??!!
+	int a = 0, ch;
+	while (!feof(fin)) {
+		ch = fgetc(fin);
+		if (ch == 13) continue; // carriage return, new line
+		if ((ch == ' ') || (ch == '\t') || (ch == '\n')) {
+			if (a > 0) {
+				if (ch == '\n') ungetc(ch, fin);
+				break;
+			}
+			// end of the words stream
+			if (ch == '\n') {
+				strcpy(word, (char *)"</s>");
+				return;
+			} else continue;
+		}
+		word[a] = ch;
+		a++;
+		if (a >= MAX_STRING - 1) a--; // Truncate too long words
+	}
+	word[a] = 0;
+}
+
+int GetWordHash(char * word) {
+	unsigned long long a, hash = 0;
+	// 257 - the smallest prime greater than 255 (1 byte)
+	for (a = 0; a < strlen(word); a++)
+		hash = hash * 257 + word[a];
+	hash = hash % vocab_hash_size;
+	return hash;
+}
+
+int AddWordToVocab(char * word) {
+	// Adds a word to the vocabulary
+	unsigned int hash, length = strlen(word) + 1;
+	if (length > MAX_STRING) length = MAX_STRING; // Truncation
+	vocab[vocab_size].word = (char *) calloc(length, sizeof(char));
+	strcpy(vocab[vocab_size].word, word);
+	// cn are initialized to 0s because
+	// it will be read later from the vocabulary file
+	vocab[vocab_size].cn = 0;
+	vocab_size++;
+	// relocate memeory if needed
+	if (vocab_size + 2 >= vocab_max_size) {
+		vocab_max_size += 1000;
+		vocab = (struct vocab_word *) realloc(vocab, vocab_max_size * sizeof(struct vocab_word));
+	}
+	// hashing value for the current word
+	hash = GetWordHash(word);
+	// increase hash by 1 until it finds an empty slot in vocab_hash !!
+	// Potetially, if the size of vocab_hash is smaller than the size of vocab
+	// it could never find an empty slot
+	// vocab_hash was intialized earlier in ReadVocab()
+	while (vocab_hash[hash] != -1) hash = (hash + 1) % vocab_hash_size;
+	vocab_hash[hash] = vocab_size - 1;
+	return vocab_size - 1;
+}
+
+int VocabCompare(const void * a, const void * b) {
+	// comparing words by their word counts
+	return ((struct vocab_word * )b)->cn - ((struct vocab_word * )a)->cn;
+}
+
+void SortVocab() {
+	// Sorts the vocabulary by frequency using word counts
+	int a, size;
+	unsigned int hash;
+	// sort the vocabulary and keep </s> at the first position
+	// in Decreasing order
+	qsort(&vocab[1], vocab_size-1, sizeof(struct vocab_word), VocabCompare);
+	// vocab_hash was earlier initialized in ReadVocab()
+	// and it is REinitialized here to be -1 BECAUSE we are
+	// sorting the words and invalidating their previous index
+	for (a = 0; a < vocab_hash_size; a++) vocab_hash[a] = -1;
+	size = vocab_size; // because vocab_size changes along the loop
+	train_words = 0;
+	for (a = 0; a < size; a++) {
+		// words occuring less than min_count times will be discared from the vocab
+		if (vocab[a].cn < min_count) {
+			vocab_size--;
+			// NOT vocab[a].word ?? A BUG ??
+			// NO actually it works here because the words are now
+			// sorted in a decreasing order (wrt word counts), so after 
+			// finding the first occurance of < min_count, all the
+			// occurances should just be behind it.
+			free(vocab[vocab_size].word);
+		} else {
+			// hash will be re-computed, as after the sorting it is not valid anymore
+			// why recomputing of the word hash is needed???
+			// as hashing of the word is based on the string itself and vocab_hash_size, and has
+			// nothing to do with the index of the word in the vocab
+			// SO THE ONLY REASON why "hash" is needed again (because it is not stored previously),
+			// is that now the hash table is filled as MOST_FREQUENT_WORD_TAKES_PRIORITY (empty slot)
+			// compared to previously FIRST_COMING_WORD_TAKES_PRIORITY in AddWordToVocab()
+			hash = GetWordHash(vocab[a].word);
+			while (vocab_hash[hash] != -1) hash = (hash + 1) % vocab_hash_size;
+			vocab_hash[hash] = a;
+			train_words += vocab[a].cn;
+			// BUT AS A RESULT, the word index used in the vocab_hash are the same
+			// index (after sorted by word counts) AS IF the infrequent words ARE 
+			// STILL IN VOCAB ??? 
+			// NO it works, because all the words discarded are in the rear
+			// of the list, so the index in vocab_hash ARE CONSISTENT with 
+			// the index in vocab, see comments above as well.
+		}
+	}
+	// now it makes sense to make the vocab table shrink 
+	// by just free the rear part of the table
+	vocab = (struct vocab_word *)realloc(vocab, (vocab_size+1) * sizeof(struct vocab_word));
+	// prepare memory for binary tree construction
+	for (a = 0; a < vocab_size; a++) {
+		vocab[a].code = (char *)calloc(MAX_CODE_LENGTH, sizeof(char));
+		vocab[a].point = (int *)calloc(MAX_CODE_LENGTH, sizeof(int));
+	}
+}
+
 void ReadVocab() {
-	//TODO
+	long long a, i = 0;
+	char c;
+	char word[MAX_STRING];
+	FILE * fin = fopen(read_vocab_file, "rb");
+	if (fin == NULL) {
+		printf("Vocabulary file not found\n");
+		exit(1);
+	}
+	// initiliaze the hash table -1 for all words
+	for (a = 0; a < vocab_hash_size; a++)
+		vocab_hash[a] = -1;
+	vocab_size = 0;
+	// read all the words, and their counts from the file
+	// add them in the vocab, add their index to vocab_hash
+	// i number of words in vocab
+	while (1) {
+		ReadWord(word, fin);
+		if (feof(fin)) break;
+		// suppose the words in vocab are already unique
+		// add word structure to vocab,
+		// put their index in vocab in vocab_hash
+		a = AddWordToVocab(word); // index of the word in vocab
+		// swallow c - the new line "\n"
+		fscanf(fin, "%lld%c", &vocab[a].cn, &c);
+		i++;
+	}
+	// sort the words by their freq. (word counts)
+	SortVocab();
+	if (debug_mode > 0) {
+		printf("Vocab size: %lld\n", vocab_size);
+		printf("Words in train file: %lld\n", train_words);
+	}
+	fin = fopen(train_file, "rb");
+	if (fin == NULL) {
+		printf("ERROR: training data file not found!\n");
+		exit(1);
+	}
+	fseek(fin, 0, SEEK_END);
+	file_size = ftell(fin);
+	fclose(fin);
+}
+
+int SearchVocab(char * word) {
+	unsigned int hash = GetWordHash(word);
+	while (1) {
+		// no found
+		if (vocab_hash[hash] == -1) return -1; 
+		// return hit index
+		if (!strcmp(word, vocab[vocab_hash[hash]].word)) return vocab_hash[hash];
+		// keep searching when no hit and no miss yet 
+		hash = (hash + 1) % vocab_hash_size;
+	}
+	return -1; // never reach here
+}
+
+void ReduceVocab() {
+	// reduces the vocabulary by removing infrequent tokens.
+	int a, b = 0;
+	unsigned int hash;
+	// The in-place removal code is FANTASTIC!!
+	for (a = 0; a < vocab_size; a++) {
+		if (vocab[a].cn > min_reduce) {
+			vocab[b].cn = vocab[a].cn;
+			vocab[b].word = vocab[a].word;
+			b++;
+		} else {
+			free (vocab[a].word);
+		}
+	}
+	vocab_size = b;
+	// reset the hash table
+	for (a = 0; a < vocab_hash_size; a++) vocab_hash[a] = -1;
+	for (a = 0; a < vocab_size; a++) {
+		// Hash will be re-computed, as it is not actual
+		hash = GetWordHash(vocab[a].word);
+		while (vocab_hash[hash] != -1) hash = (hash + 1) % vocab_hash_size;
+		vocab_hash[hash] = a;
+	}
+	fflush(stdout);
+	// Incerease the threshold next time
+	// so it wont be a for-ever loop twisted with LearnVocabFromTrainFile
+	min_reduce++;
 }
 
 void LearnVocabFromTrainFile() {
-	//TODO
+	char word[MAX_STRING];
+	FILE * fin;
+	long long a, i;
+	// initialize hash table as all -1s
+	for (a = 0; a < vocab_hash_size; a++) vocab_hash[a] = -1;
+	fin = fopen(train_file, "rb");
+	if (fin == NULL) {
+		printf("ERROR: training data file not found!\n");
+		exit(1);
+	}
+	vocab_size = 0;
+	// always add </s> as the first one - otherwise SortVocab will be wrong
+	// THis is consistent with ReadVocab()
+	AddWordToVocab((char *)"</s>");
+	while (1) {
+		ReadWord(word, fin);
+		// ReadWord, but no fscanf(fin, "%lld%c", ...); as in ReadVocab file
+		if (feof(fin)) break;
+		train_words++;
+		if ((debug_mode > 1) && (train_words % 100000 == 0)) {
+			printf("%lldK%c", train_words / 1000, 13);
+			fflush(stdout);
+		}
+		// find the index of word in vocab by searching in vocab_hash
+		i = SearchVocab(word);
+		// no found in vocab - add to vocab and vocab_hash, set word.cn = 1
+		// found in vocab - update word.cn += 1
+		if (i == -1) {
+			a = AddWordToVocab(word);
+			vocab[a].cn = 1;
+		} else vocab[i].cn++;
+		// vocab is too LARGE for the current vocab_hash_table
+		if (vocab_size > vocab_hash_size * 0.7) ReduceVocab();
+	}
+	SortVocab();
+	if (debug_mode > 0) {
+		printf("Vocab size: %lld\n", vocab_size);
+		printf("Words in train file: %lld\n", train_words);
+	}
+	file_size = ftell(fin);
+	fclose(fin);
 }
 
 void SaveVocab() {
@@ -206,13 +459,35 @@ void TrainModel(){
 				closev = sqrt(closev);
 				for (c = 0; c < layer1_size; c++) cent[layer1_size * b + c] /= closev;
 			}
+			// ASSIGN each word to the corresponding center
+			// for each word, for each cluster, 
+			// calculate the dist between the word vec and the cluster center 
+			// (cluster vecs have all been normalized, so just use the inner product)
+			// find the closest cluster center to the current word vector
+			// closev (the closest dist so far), closeid (the closest cluster id so far)
 			for (c = 0; c < vocab_size; c++) {
 				closev = -10;
 				closeid = 0;
+				for (d = 0; d < clcn; d++) {
+					x = 0;
+					for (b = 0; b < layer1_size; b++)
+						x += cent[layer1_size * d + b] * syn0[c * layer1_size + b];
+					if (x > closev) {
+						closev = x;
+						closeid = d;
+					}
+				}
+				cl[c] = closeid;
 			}
 		}
 		// save the kmeans classes
+		for (a = 0; a < vocab_size; a++)
+			fprintf(fo, "%s %d\n", vocab[a].word, cl[a]);
+		free(centcn);
+		free(cent);
+		free(cl);
 	}
+	fclose(fo);
 }
 
 // parse the command line arguments
@@ -295,7 +570,7 @@ int main(int argc, char ** argv) {
   if ((i = ArgPos((char *)"-threads", argc, argv)) > 0) num_threads = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-min-count", argc, argv)) > 0) min_count = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-classes", argc, argv)) > 0) classes = atoi(argv[i + 1]);
-  // allocate memory for vocab, vocab-hash, and expTable table
+  // allocate memory for vocab, vocab_hash, and expTable table
   vocab = (struct vocab_word *)calloc(vocab_max_size, sizeof(struct vocab_word));
   vocab_hash = (int *)calloc(vocab_hash_size, sizeof(int));
   // precomputing exponetial table 

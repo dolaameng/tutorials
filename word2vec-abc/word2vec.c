@@ -58,7 +58,7 @@ typedef float real;
 struct vocab_word {
 	long long cn; // word count, read from vocab file or counted from train
 	int * point; // binary tree edges
-	char *word, *code, codelen; // word: the string, code: binary tree code
+	char *word, *code, codelen; // word: the string, code: binary tree code, codelen: depth (len of code)
 };
 
 char train_file[MAX_STRING], output_file[MAX_STRING];
@@ -383,12 +383,15 @@ void CreateBinaryTree() {
 	long long point[MAX_CODE_LENGTH];
 	char code[MAX_CODE_LENGTH];
 	// calloc initializes the memory to zeros
+	// SHOULD IT BE vocab_size * 2 - 1
 	long long *count = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
 	long long *binary = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
 	long long *parent_node = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
 	// count - word counts of all words
 	for (a = 0; a < vocab_size; a++) count[a] = vocab[a].cn;
 	// extend count as twice large
+	// SO ONLY vocab_size * 2 - 1 elements will BE NEEDED, EVEN FOR A 
+	// COMPLETE TREE
 	for (a = vocab_size; a < vocab_size * 2; a++) count[a] = 1e15;
 	// initialize the node positions
 	pos1 = vocab_size - 1; 
@@ -396,9 +399,16 @@ void CreateBinaryTree() {
 	// following algorithm constructs the Huffman tree by
 	// adding one node at a time
 	// the vocab should have been sorted IN DECREASING order
-	// Initially pos1 will always move left because large val at pos2 blocks it
-	// Then it will update level 2 parents and higher levels (by moving to right)
-	// only need to check vocab_size - 2 times - build the parents
+	// pos1 and pos2 will be the two current smallest node 
+	// they could be the original elements, they could be composed parent nodes
+	// the parents node will be constructed and placed along the array
+	// from [vocab_size to vocab_size * 2 - 1].
+	// THE GOOD THING IS: the elements on the left of pos1 are all SORTED, 
+	// and the elements on the right of pos2 will also be SORTED.
+
+	// THE LAST WORD </s> WILL ALSO BE INCLUDED IN THE TREE
+	// ONLY NEED TO CONSTRUCT vocab_size - 1 times, that is max number 
+	// of parent nodes for a complete binary tree
 	for (a = 0; a < vocab_size - 1; a++) {
 		// First, find two smallest nodes "min1, min2"
 		// MIN1 goes first
@@ -433,7 +443,7 @@ void CreateBinaryTree() {
 		// level 2 parents will be from vocab_size to vocab_size * 2
 		parent_node[min1i] = vocab_size + a;
 		parent_node[min2i] = vocab_size + a;
-		// binary code: min1i 0 min2i 1
+		// binary code: min1i 0 min2i 1, for each leaf and internal node
 		binary[min2i] = 1;
 	}
 	// now assign binary code to each vocabulary word
@@ -441,15 +451,21 @@ void CreateBinaryTree() {
 	for (a = 0; a < vocab_size; a++) {
 		b = a;
 		i = 0;
+		// upstreaming to parent of each leave (a) and its parent (b)
+		// to update their code and point - they are temprory structure
+		// whose max length is the tranverse length
+		// * point is an array of indices in count, in an the order of 
+		//   traversing the tree from each leaf to its parents up to the root
+		// * code is an array 
 		while (1) {
 			code[i] = binary[b];
 			point[i] = b;
 
-			i++;
+			i++; // the depth of traverse from leaf to root
 			b = parent_node[b];
 			if (b == vocab_size * 2 - 2) break;
 		}
-		vocab[a].codelen = i;
+		vocab[a].codelen = i; // depth
 		vocab[a].point[0] = vocab_size - 2;
 		for (b = 0; b < i; b++) {
 			vocab[a].code[i - b - 1] = code[b];
@@ -496,7 +512,69 @@ void InitNet() {
 }
 
 void *TrainModelThread(void *id) {
-	//TODO
+	long long a, b, d, word, last_word, sentence_length = 0, sentence_position = 0;
+	long long word_count = 0, last_word_count = 0, sen[MAX_SENTENCE_LENGTH + 1];
+	long long l1, l2, c, target, label;
+	// id is NOT a pointer to an address, it itself is an interger (long, long)
+	// see the caller function for details
+	unsigned long long next_random = (long long) id;
+	real f, g; // function and gradient
+	clock_t now;
+	// ??
+	real * neu1 = (real *)calloc(layer1_size, sizeof(real));
+	// ?? error of 
+	real * neu1e = (real *)calloc(layer1_size, sizeof(real));
+	// embarassingly parallel model - chunk the data file
+	// synchoronize on global structure of net 
+	FILE * fi = fopen(train_file, "rb");
+	fseek(fi, file_size / (long long)num_threads * (long long)id, SEEK_SET);
+	// RELATED VARIABLES: 
+	// word, last_word, word_count, last_word_count (word_count_actual local copy)
+	// sentence_length, sentence_position
+	// word_count_actual - global variable to share among different threads
+	while (1) {
+		if (word_count - last_word_count > 10000) {
+			word_count_actual += word_count - last_word_count;
+			last_word_count = word_count;
+			if (debug_mode > 1) {
+				now = clock();
+				printf("%cAlpah: %f Progress: %.2f%% Words/thread/sec: %.2fk ", 13, alpha, 
+					word_count_actual / (real)(train_words + 1) * 100,
+					word_count_actual / ((real)(now - start + 1) / (real)CLOCKS_PER_SEC * 1000));
+				fflush(stdout);
+			}
+			// use word_count to control learning rate (decreasing and converging)
+			alpha = strarting_alpha * (1 - word_count_actual / (real)(train_words + 1));
+			if (alpha < starting_alpha * 0.0001) alpha = starting_alpha * 0.0001;
+		}
+		if (sentence_length == 0) {
+			//TODO
+		}
+		if (feof(fi)) break;
+		if (word_count > train_words / num_threads) break;
+		word = sen[sentence_position];
+		if (word == -1) continue;
+		for (c = 0; c < layer1_size; c++) neu1[c] = 0;
+		for (c = 0; c < layer1_size; c++) neu1e[c] = 0;
+		// comments on random seed - 
+		// http://ozark.hendrix.edu/~burch/logisim/docs/2.3.0/libs/mem/random.html
+		next_random = next_random * (unsigned long long)25214903917 + 11;
+		b = next_random % window;
+		if (cbow) { // train the cbow architecture
+			//TODO
+		} else { // train skip-gram
+			//TODO
+		}
+		sentence_position++;
+		if (sentence_position >= sentence_length) {
+			sentence_length = 0;
+			continue;
+		}
+	}
+	fclose(fi);
+	free(neu1);
+	free(neu1e);
+	pthread_exit(NULL);
 }
 
 void TrainModel(){
@@ -519,6 +597,7 @@ void TrainModel(){
 
 	// create threads to do training and block-wait
 	start = clock();
+	// pass a instead of &a, as "a" is a local variable
 	for (a = 0; a < num_threads; a++) pthread_create(&pt[a], NULL, TrainModelThread, (void *)a);
 	for (a = 0; a < num_threads; a++) pthread_join(pt[a], NULL);
 

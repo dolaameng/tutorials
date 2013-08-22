@@ -477,6 +477,14 @@ void CreateBinaryTree() {
 	free(parent_code);
 }
 
+int ReadWordIndex(FILE * fin) {
+	// Reads a word and returns its index in the vocabulary
+	char word[MAX_STRING];
+	ReadWord(word, fin);
+	if (feof(fin)) return -1;
+	return SearchVocab(word);
+}
+
 // IT SEEMS that hs and negative can be used TOGETHER
 void InitNet() {
 	// intialize the neural network structure
@@ -511,6 +519,8 @@ void InitNet() {
 	CreateBinaryTree();
 }
 
+// learning: hs (hierarchical softmax) v.s. negative sampling
+// model: cbow v.s. skip gram
 void *TrainModelThread(void *id) {
 	long long a, b, d, word, last_word, sentence_length = 0, sentence_position = 0;
 	long long word_count = 0, last_word_count = 0, sen[MAX_SENTENCE_LENGTH + 1];
@@ -520,7 +530,7 @@ void *TrainModelThread(void *id) {
 	unsigned long long next_random = (long long) id;
 	real f, g; // function and gradient
 	clock_t now;
-	// ??
+	// hidden output, neu1 is a vector, input syn0 is an matrix (collection of vectors)
 	real * neu1 = (real *)calloc(layer1_size, sizeof(real));
 	// ?? error of 
 	real * neu1e = (real *)calloc(layer1_size, sizeof(real));
@@ -533,6 +543,8 @@ void *TrainModelThread(void *id) {
 	// sentence_length, sentence_position
 	// word_count_actual - global variable to share among different threads
 	while (1) {
+		// use word_count to control learning rate (decreasing and converging)
+		// every time when another 10000 words have been counted
 		if (word_count - last_word_count > 10000) {
 			word_count_actual += word_count - last_word_count;
 			last_word_count = word_count;
@@ -543,28 +555,87 @@ void *TrainModelThread(void *id) {
 					word_count_actual / ((real)(now - start + 1) / (real)CLOCKS_PER_SEC * 1000));
 				fflush(stdout);
 			}
-			// use word_count to control learning rate (decreasing and converging)
 			alpha = strarting_alpha * (1 - word_count_actual / (real)(train_words + 1));
 			if (alpha < starting_alpha * 0.0001) alpha = starting_alpha * 0.0001;
 		}
+		// if sen is empty, create the sentence by reading words from file
+		// and add their vocab index to sen, initialize sentence_position = 0
+		// Discarding some infrequent words based on subsampling  
+		// ONLY read when sen is EMPTY AGAIN and REFILL IT
 		if (sentence_length == 0) {
-			//TODO
+			while(1) {
+				// read a word from file chunk and find the its index in vocab
+				word = ReadWordIndex(fi);
+				// end of word stream
+				if (feof(fi)) break;
+				// word not found in vocab
+				if (word == -1) continue;
+				word_count++;
+				// the </s>, which marks the end?
+				if (word == 0) break;
+				// the subsampling randomly discards frequent
+				// words while keeping the ranking same
+				if (sample > 0) {
+					real ran = (sqrt(vocab[word].cn / (sample * train_words)) + 1) * (sample * train_words) / vocab[word].cn;
+					next_random = next_random * (unsigned long long)25214903917 + 11;
+					if (ran < (next_random & 0xFFFF) / (real)65536) continue;
+				}
+				// add word (index) to sen
+				sen[sentence_length] = word;
+				sentence_length++;
+				// sentence is full
+				if (sentence_length >= MAX_SENTENCE_LENGTH) break;
+			}
+			sentence_position = 0;
 		}
+		// end of file or exceeds to the next chunk of data - stop
 		if (feof(fi)) break;
 		if (word_count > train_words / num_threads) break;
+		// for word(index) in sentence
 		word = sen[sentence_position];
+		// no word at all - should NOT get into sen in the first place
 		if (word == -1) continue;
+		// initialize neu1 and its error
 		for (c = 0; c < layer1_size; c++) neu1[c] = 0;
 		for (c = 0; c < layer1_size; c++) neu1e[c] = 0;
 		// comments on random seed - 
 		// http://ozark.hendrix.edu/~burch/logisim/docs/2.3.0/libs/mem/random.html
 		next_random = next_random * (unsigned long long)25214903917 + 11;
+		// b defines the bound (randomly) with a of the word window in sen.
+		// a is window * 2 + 1 - b
 		b = next_random % window;
-		if (cbow) { // train the cbow architecture
-			//TODO
+
+		if (cbow) { // train the cbow architecture - HS or NS
+			// in -> hidden, syn0 -> neu1
+			for (a = b; a < window * 2 + 1 - b; a++) if (a != window) {
+				c = sentence_position - window + a;
+				if (c < 0) continue;
+				if (c >= sentence_length) continue;
+				last_word = sen[c];
+				if (last_word == -1) continue;
+				// for each hidden neu1[c], it is the sum of 
+				// several input syn0[c + lastword_i]
+				// the lastword_i s define a window
+				for (c = 0; c < layer1_size; c++) 
+					neu1[c] += syn0[c + last_word * layer1_size];
+			}
+			// HIERARCHICAL SOFTMAX
+			if (hs) for (d = 0; d < vocab[word].codelen; d++) {
+				//TODO
+				??
+			}
+			// NEGATIVE SAMPLING
+			if (negative > 0) for (d = 0; d < negative + 1; d++) {
+				//TODO
+			}
+			// hidden -> in
+			for (a = b; a < window * 2 + 1 -b; a++) if (a != window) {
+				//TODO
+			}
 		} else { // train skip-gram
 			//TODO
 		}
+		// next word in sen or SIMPLY refill from file
 		sentence_position++;
 		if (sentence_position >= sentence_length) {
 			sentence_length = 0;

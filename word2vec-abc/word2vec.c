@@ -469,7 +469,7 @@ void CreateBinaryTree() {
 		vocab[a].point[0] = vocab_size - 2;
 		for (b = 0; b < i; b++) {
 			vocab[a].code[i - b - 1] = code[b];
-			vocab[a].point[i - b] = point[b] - vocab_size;
+			vocab[a].point[i - b] = point[b] - vocab_size; // parent node index
 		}
 	}
 	free(count);
@@ -603,32 +603,52 @@ void *TrainModelThread(void *id) {
 		next_random = next_random * (unsigned long long)25214903917 + 11;
 		// b defines the bound (randomly) with a of the word window in sen.
 		// a is window * 2 + 1 - b
-		b = next_random % window;
+		// WINDOW OFFSET - the new window size will be (window - b)
+		b = next_random % window; 
 
 		if (cbow) { // train the cbow architecture - HS or NS
-			// in -> hidden, syn0 -> neu1
+			// IN -> HIDDEN
+			// c in [sentence_position - (window-b), sentence_position + (window-b)]
 			for (a = b; a < window * 2 + 1 - b; a++) if (a != window) {
+				// bypass the word sen[c] that is beyond the sentence range
 				c = sentence_position - window + a;
 				if (c < 0) continue;
 				if (c >= sentence_length) continue;
+				// last_word: those in the sliding window around word
 				last_word = sen[c];
 				if (last_word == -1) continue;
 				// for each hidden neu1[c], it is the sum of 
 				// several input syn0[c + lastword_i]
 				// the lastword_i s define a window
+				// syn0 SIZE: vocab_size*layer1_size, neu1 SIZE: layer1_size
+				// accumulate the feats of lastword in syn0 to neu1
+				// last word be iterating from the sliding window [-(window-b), +(window+b)] 
+				// around current word (sen[sentence_position] or word)
 				for (c = 0; c < layer1_size; c++) 
 					neu1[c] += syn0[c + last_word * layer1_size];
 			}
 			// HIERARCHICAL SOFTMAX
+			// PRECONDITION: word = sen[sentence_position]
 			if (hs) for (d = 0; d < vocab[word].codelen; d++) {
-				//TODO
-				??
+				f = 0; // OBJECTIVE function
+				l2 = vocab[word].point[d] * layer1_size;
+				// propagate hidden -> output
+				for (c = 0; c < layer1_size; c++) f += neu1[c] * syn1[c + l2];
+				if (f <= -MAX_EXP) continue;
+				else if (f >= MAX_EXP) continue;
+				else f = expTable[(int)((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))];
+				// g is the gradient multiplied by the learning rate
+				g = (1 - vocab[word].code[d] -f) * alpha;
+				// propogate errors output -> hidden
+				for (c = 0; c < layer1_size; c++) neu1e[c] += g * syn1[c + l2];
+				// learning weights hidden -> output
+				for (c = 0; c < layer1_size; c++) syn1[c + l2] += g * neu1[c];
 			}
 			// NEGATIVE SAMPLING
 			if (negative > 0) for (d = 0; d < negative + 1; d++) {
 				//TODO
 			}
-			// hidden -> in
+			// HIDDEN -> IN
 			for (a = b; a < window * 2 + 1 -b; a++) if (a != window) {
 				//TODO
 			}

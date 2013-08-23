@@ -466,7 +466,9 @@ void CreateBinaryTree() {
 			if (b == vocab_size * 2 - 2) break;
 		}
 		vocab[a].codelen = i; // depth
-		vocab[a].point[0] = vocab_size - 2;
+		// point - relative index of parent from vocab_size+1
+		// in reverse order - path from root to the current word (leaf node)
+		vocab[a].point[0] = vocab_size - 2; 
 		for (b = 0; b < i; b++) {
 			vocab[a].code[i - b - 1] = code[b];
 			vocab[a].point[i - b] = point[b] - vocab_size; // parent node index
@@ -573,7 +575,7 @@ void *TrainModelThread(void *id) {
 				word_count++;
 				// the </s>, which marks the end?
 				if (word == 0) break;
-				// the subsampling randomly discards frequent
+				// the subsampling randomly discards infrequent
 				// words while keeping the ranking same
 				if (sample > 0) {
 					real ran = (sqrt(vocab[word].cn / (sample * train_words)) + 1) * (sample * train_words) / vocab[word].cn;
@@ -631,6 +633,7 @@ void *TrainModelThread(void *id) {
 			// PRECONDITION: word = sen[sentence_position]
 			if (hs) for (d = 0; d < vocab[word].codelen; d++) {
 				f = 0; // OBJECTIVE function
+				// the feature start in syn0 for parent node of vocab[word]
 				l2 = vocab[word].point[d] * layer1_size;
 				// propagate hidden -> output
 				for (c = 0; c < layer1_size; c++) f += neu1[c] * syn1[c + l2];

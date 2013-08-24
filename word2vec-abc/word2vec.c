@@ -197,9 +197,12 @@ void SortVocab() {
 	train_words = 0;
 	for (a = 0; a < size; a++) {
 		// words occuring less than min_count times will be discared from the vocab
+		// BUT HERE </s> WILL STILL REMAIN - because the words are removed from
+		// the end of vocab
+		// AND </s> IS NOT HASHED IN vocab_hash -- its index is still -1
 		if (vocab[a].cn < min_count) {
 			vocab_size--;
-			// NOT vocab[a].word ?? A BUG ??
+			// NOT vocab[a].word but vocab[vocab_size].word ?? A BUG ??
 			// NO actually it works here because the words are now
 			// sorted in a decreasing order (wrt word counts), so after 
 			// finding the first occurance of < min_count, all the
@@ -227,6 +230,7 @@ void SortVocab() {
 	}
 	// now it makes sense to make the vocab table shrink 
 	// by just free the rear part of the table
+	// MUST BE VOCAB_SIZE + 1 because </s> is there
 	vocab = (struct vocab_word *)realloc(vocab, (vocab_size+1) * sizeof(struct vocab_word));
 	// prepare memory for binary tree construction
 	for (a = 0; a < vocab_size; a++) {

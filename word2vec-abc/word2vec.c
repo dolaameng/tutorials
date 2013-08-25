@@ -195,6 +195,8 @@ void SortVocab() {
 	for (a = 0; a < vocab_hash_size; a++) vocab_hash[a] = -1;
 	size = vocab_size; // because vocab_size changes along the loop
 	train_words = 0;
+	// OUTPUT OF THE LOOP: ALL INFREQUNET WORDS DELETED, vocab_size, and
+	// train_words size are all correct
 	for (a = 0; a < size; a++) {
 		// words occuring less than min_count times will be discared from the vocab
 		// BUT HERE </s> WILL STILL REMAIN - because the words are removed from
@@ -340,6 +342,7 @@ void LearnVocabFromTrainFile() {
 	// THis is consistent with ReadVocab()
 	AddWordToVocab((char *)"</s>");
 	while (1) {
+		// WILL INSERT </S> FOR EACH NEW LINE
 		ReadWord(word, fin);
 		// ReadWord, but no fscanf(fin, "%lld%c", ...); as in ReadVocab file
 		if (feof(fin)) break;
@@ -387,7 +390,9 @@ void CreateBinaryTree() {
 	long long point[MAX_CODE_LENGTH];
 	char code[MAX_CODE_LENGTH];
 	// calloc initializes the memory to zeros
-	// SHOULD IT BE vocab_size * 2 - 1
+	// SHOULD IT BE vocab_size * 2 - 1 - this is because
+	// it seems that </s> is in part of construction, but vocab_size is 
+	// actually len(vocab)-1, excluding </s>
 	long long *count = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
 	long long *binary = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
 	long long *parent_node = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));

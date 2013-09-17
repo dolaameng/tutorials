@@ -45,7 +45,7 @@ def batch_sgd_optimize(model_infor, n_epochs, verbose = True, patience = 1000,
 					)
 				if this_validation_error < best_validation_error:
 					if this_validation_error < best_validation_error * improvement_threshold:
-						patience = max(patience, iter * patience)
+						patience = max(patience, iter * patience_increase)
 					best_validation_error = this_validation_error
 					best_params = [p.get_value(borrow=True) for p in params] ## should be OK to update this way
 			if patience <= iter:

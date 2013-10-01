@@ -209,8 +209,20 @@ class SparseAuoEncoder(object):
 
 		return _objective
 	def fit(self, data_X, *args, **kwargs):
+		"""
+		data_X should be scaled to [0, 1]
+		"""
 		f = self.get_objective_fn(data_X)
 		param0 = self.initial_params_value()
 		optimal_param = autodiff.optimize.fmin_l_bfgs_b(f, param0, *args, **kwargs)
 		self.params = optimal_param
 		return self
+	def transform(self, data_X):
+		"""
+		data_X should be scaled to [0, 1]. 
+		As feature learning step, transfomation of sparse auto encoder 
+		will be the activation of hidden neurouns
+		"""
+		W1, W2, b1, b2 = self.restore_params()
+		Y = sigmoid(np.dot(data_X, W1) + b1)
+		return Y 

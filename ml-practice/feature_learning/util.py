@@ -43,6 +43,14 @@ def sample_patches(images, npatches, patch_sz):
 def sigmoid(u):
 	return 1. / (1. + np.exp(-u))
 
+def softmax(X):
+	result = np.zeros_like(X)
+	for i in xrange(X.shape[0]):
+		row = X[i]
+		result[i] = np.exp(row - np.max(row))
+		result[i] /= np.sum(result[i])
+	return result 
+
 def share_gpu_data(data, return_type = None, borrow = True):
 	shared_data = shared(np.asarray(data, dtype = config.floatX), 
 						borrow = borrow)

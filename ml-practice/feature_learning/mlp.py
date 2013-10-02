@@ -1,15 +1,16 @@
 from util import *
 
 class SoftmaxMLP(BaseEstimator):
-	def __init__(self, l2_coeff
+	def __init__(self, l2_coeff,
 			layer_dims, layer_params = None):
 		"""
 		layer_params should be in format [(W1, b1), (W2, b2), ...]
 		layer_dims should be in format [nin, n1, n2, ..., nout]
 		"""
+		self.l2_coeff = l2_coeff
 		self.layer_dims = layer_dims
 		if layer_params:
-			assert len(layer_dims)-2 == len(layer_params)
+			assert len(layer_dims)-1 == len(layer_params)
 			self.params = self.flatten_params(layer_params)
 		else:
 			self.params = self.initialize_params()
@@ -56,10 +57,30 @@ class SoftmaxMLP(BaseEstimator):
 		return layer_params 
 	def get_objective_fn(self, X, y):
 		def _objective(param_value):
-			pass
+			self.params = param_value
+			layer_params = self.restore_params()
+
+			l2norm = 0
+			## hidden layers forwarding
+			Y = X 
+			for i, (W, b) in enumerate(layer_params):
+				Y = sigmoid(np.dot(Y, W) + b)
+				l2norm += np.sum(W ** 2)
+			## output layers
+			Z = softmax(Y)
+			## negative log-likelihood
+			likelihood = -np.mean(np.log(Z)[np.arange(Z.shape[0]), self.y_indices_])
+			cost = likelihood + self.l2_coeff * l2norm
+			return cost
+
 		return _objective
 	def fit(self, X, y):
+		## TODO
+		self.classes_ = np.unique(y)
+		self.y_indices_ = np.asarray([np.nonzero(yi == self.classes_)[0][0] 
+								for yi in y])
 		pass
+		## TODO
 
 if __name__ == '__main__':
 	smlp = SoftmaxMLP([10, 5, 5, 10])

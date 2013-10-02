@@ -17,7 +17,7 @@ def plot_images(imgs, layout, img_sz = 0.7, suptitle = ''):
 	nrows, ncols = layout 
 	fig, axes = plt.subplots(nrows, ncols, 
 		figsize = (img_sz * ncols, img_sz * nrows))
-	axes = axes.flatten()
+	axes = axes.ravel()
 	fig.subplots_adjust(hspace = 0, wspace = 0)
 	fig.suptitle(suptitle)
 	for i, img in enumerate(imgs):

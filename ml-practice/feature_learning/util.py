@@ -47,7 +47,7 @@ def softmax(X):
 	result = np.zeros_like(X)
 	for i in xrange(X.shape[0]):
 		row = X[i]
-		result[i] = np.exp(row - np.max(row))
+		#result[i] = np.exp(row - max(row))
 		result[i] /= np.sum(result[i])
 	return result 
 

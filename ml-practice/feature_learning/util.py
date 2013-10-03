@@ -47,9 +47,16 @@ def softmax(X):
 	result = np.zeros_like(X)
 	for i in xrange(X.shape[0]):
 		row = X[i]
-		#result[i] = np.exp(row - max(row))
+		result[i] = np.exp(row - max(row))
 		result[i] /= np.sum(result[i])
 	return result 
+
+def soft_absolute(u):
+	"""
+	soft approx to |u|
+	"""
+	epsilon = 1e-8
+	return np.sqrt(epsilon + u * u)
 
 def share_gpu_data(data, return_type = None, borrow = True):
 	shared_data = shared(np.asarray(data, dtype = config.floatX), 

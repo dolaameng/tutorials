@@ -2,7 +2,7 @@
 from util import *
 
 
-class SparseAuoEncoder(BaseEstimator):
+class SparseAutoEncoder(BaseEstimator):
 	"""
 	params: W1, b1, W2, b2
 	objective: least_square + lambda*l2_norm + beta*sparsity

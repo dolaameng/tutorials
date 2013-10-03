@@ -35,7 +35,9 @@ class PCATransform(BaseEstimator):
 
 		return self
 	def transform(self, X):
-		X0 = (X - self.mean_[:, np.newaxis] 
+		#X0 = (X - self.mean_[:, np.newaxis] 
+		#		if self.mean_axis_ == 1 else X - self.mean_)
+		X0 = (X - np.mean(X, axis = self.mean_axis_)[:, np.newaxis] 
 				if self.mean_axis_ == 1 else X - self.mean_)
 		return np.dot(X0, 
 					self.components_[:, :self.ncomponents])

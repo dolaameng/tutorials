@@ -1,6 +1,10 @@
 from util import *
 
 class SparseFilter(BaseEstimator):
+	"""
+	Unlike sparse auto encoder, and similiar to linear decoder,
+	the SparseFilter does not need the inputs to be scaled to [0, 1]
+	"""
 	def __init__(self, n_vis, n_hid):
 		self.epsilon = 1e-8
 		self.n_vis = n_vis

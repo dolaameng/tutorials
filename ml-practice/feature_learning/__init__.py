@@ -7,4 +7,4 @@ import sparse_filtering
 
 __all__ = ["preprocessing", "util", "mlp", 
 			"transform", "sparse_autoencoder", 
-			"sparse_filtering"]
+			"sparse_filtering", "clustering"]

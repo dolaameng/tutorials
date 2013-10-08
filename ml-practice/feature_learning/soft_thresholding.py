@@ -5,6 +5,11 @@ from sklearn.preprocessing import normalize
 from sklearn.decomposition import RandomizedPCA
 from sklearn.utils import check_random_state
 
+## FEATURE LEARNING FOR DISCRETE-VALUE ATTRIBUTES:
+## one interesting idea is to use sklearn.ensemble.RandomTreesEmbedding to do nonparametric density estimation
+## and thus use the leave node as the clustering centers, and then apply the soft-thresholding on them to 
+## extract features
+
 def deprecated_soft_threshold(data, centers, threshold = 0.0):
 	## normalize both data and centers PER SAMPLE
 	C = normalize(centers)

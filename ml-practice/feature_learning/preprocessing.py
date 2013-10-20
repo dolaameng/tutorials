@@ -1,4 +1,5 @@
 from util import *
+from sklearn.base import BaseEstimator, TransformerMixin
 
 def normalize_image01(image_features):
 	"""

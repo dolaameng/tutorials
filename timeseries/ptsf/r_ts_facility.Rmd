@@ -1,0 +1,38 @@
+Introduction to R's time series facilities
+========================================================
+online resource: http://people.su.se/~lundh/reproduce/introduction_ts.pdf
+
+###download data examples - run once
+```{r}
+library(utils)
+library(xts) ##build on top of zoo
+library(plyr)
+
+
+#URL <- "http://people.su.se/~lundh/reproduce/"
+#FILE <- "PR0101B1.scb"
+#download.file(paste(URL, FILE, sep = ""), FILE)
+```
+###load data
+```{r}
+cpi <- read.table("PR0101B1.scb", skip=1, col.names=c("Time", "CPI"), stringsAsFactors=F)
+head(cpi)
+```
+
+###convert to ts
+```{r}
+time.axis <- as.yearmon(cpi$Time, "%YM%m")
+cpi <- cpi[, -c(1), drop = F]
+cpi <- xts(cpi, time.axis)
+```
+
+###time related operation
+```{r}
+head(cycle(cpi), 30)
+head(time(cpi))
+frequency(cpi)
+start(cpi)
+end(cpi)
+plot(window(cpi, start="May 1990", end="May 2005"))
+#plot(ts.union(window(cpi, start="Jan 1990", end="Jan 2001"), window(cpi, start="Jan 2003")))
+```

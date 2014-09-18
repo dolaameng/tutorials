@@ -1,0 +1,1 @@
+I purchased the <practical Python and OpenCV> and <Case Studies> book from [pyimagesearch](https://www.pyimagesearch.com/practical-python-opencv/). It turns out to be good chance for me to systematically compare the difference between opencv and other image libraries in Python, e.g., skimage, mahotas and etc. Here are some notes that I have taken.
